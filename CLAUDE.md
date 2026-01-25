@@ -72,7 +72,7 @@ sqlite3 data/finance.db
 - Matches against transaction description and counterparty
 
 **Frontend:**
-- Currency formatting in Bulgarian (лв)
+- Currency formatting in Bulgarian (euro)
 - All API calls through singleton `APIClient` class
 - Page navigation via `data-page` attributes
 

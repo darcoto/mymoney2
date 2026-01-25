@@ -1,0 +1,218 @@
+const axios = require('axios');
+const config = require('./config');
+const database = require('./database');
+
+const BASE_URL = config.goCardless.apiUrl;
+
+// Create axios instance with auth
+function getAuthenticatedClient() {
+  return axios.create({
+    baseURL: BASE_URL,
+    headers: {
+      'Authorization': `Bearer ${config.goCardless.secretId}:${config.goCardless.secretKey}`,
+      'Content-Type': 'application/json'
+    }
+  });
+}
+
+// OAuth initialization
+async function initiateOAuth() {
+  try {
+    const client = getAuthenticatedClient();
+    const response = await client.post('/api/v2/token/new/', {
+      secret_id: config.goCardless.secretId,
+      secret_key: config.goCardless.secretKey
+    });
+
+    return {
+      link: response.data.link,
+      requisitionId: response.data.id
+    };
+  } catch (error) {
+    console.error('Error initiating OAuth:', error.response?.data || error.message);
+    throw new Error('Failed to initiate GoCardless OAuth');
+  }
+}
+
+// Exchange requisition for tokens
+async function exchangeRequisition(requisitionId) {
+  try {
+    const client = getAuthenticatedClient();
+    const response = await client.get(`/api/v2/requisitions/${requisitionId}/`);
+
+    if (response.data.status === 'LN') {
+      // Linked successfully
+      return {
+        accounts: response.data.accounts,
+        institutionId: response.data.institution_id
+      };
+    }
+
+    return null;
+  } catch (error) {
+    console.error('Error exchanging requisition:', error.response?.data || error.message);
+    throw new Error('Failed to exchange requisition');
+  }
+}
+
+// Get account details
+async function getAccountDetails(accountId) {
+  try {
+    const token = await database.getGoCardlessToken();
+    if (!token || !token.access_token) {
+      throw new Error('No valid access token');
+    }
+
+    const client = axios.create({
+      baseURL: BASE_URL,
+      headers: {
+        'Authorization': `Bearer ${token.access_token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const response = await client.get(`/api/v2/accounts/${accountId}/details/`);
+    return response.data.account;
+  } catch (error) {
+    console.error('Error getting account details:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+// Get account balances
+async function getAccountBalances(accountId) {
+  try {
+    const token = await database.getGoCardlessToken();
+    if (!token || !token.access_token) {
+      throw new Error('No valid access token');
+    }
+
+    const client = axios.create({
+      baseURL: BASE_URL,
+      headers: {
+        'Authorization': `Bearer ${token.access_token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const response = await client.get(`/api/v2/accounts/${accountId}/balances/`);
+    return response.data.balances;
+  } catch (error) {
+    console.error('Error getting account balances:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+// Get transactions
+async function getTransactions(accountId, dateFrom = null, dateTo = null) {
+  try {
+    const token = await database.getGoCardlessToken();
+    if (!token || !token.access_token) {
+      throw new Error('No valid access token');
+    }
+
+    const client = axios.create({
+      baseURL: BASE_URL,
+      headers: {
+        'Authorization': `Bearer ${token.access_token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const params = {};
+    if (dateFrom) params.date_from = dateFrom;
+    if (dateTo) params.date_to = dateTo;
+
+    const response = await client.get(`/api/v2/accounts/${accountId}/transactions/`, { params });
+    return response.data.transactions;
+  } catch (error) {
+    console.error('Error getting transactions:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+// Sync all accounts
+async function syncAccounts(accountIds) {
+  const syncedAccounts = [];
+
+  for (const accountId of accountIds) {
+    try {
+      const details = await getAccountDetails(accountId);
+      const balances = await getAccountBalances(accountId);
+
+      const currentBalance = balances.balanceAmount
+        ? parseFloat(balances.balanceAmount.amount)
+        : 0;
+
+      const account = {
+        id: accountId,
+        name: details.name || details.iban || 'Unknown Account',
+        institutionName: details.institutionId || '',
+        iban: details.iban,
+        currency: details.currency || 'BGN',
+        balance: currentBalance
+      };
+
+      await database.upsertAccount(account);
+      syncedAccounts.push(account);
+    } catch (error) {
+      console.error(`Error syncing account ${accountId}:`, error.message);
+    }
+  }
+
+  return syncedAccounts;
+}
+
+// Sync transactions for an account
+async function syncAccountTransactions(accountId, daysBack = 90) {
+  try {
+    const dateFrom = new Date();
+    dateFrom.setDate(dateFrom.getDate() - daysBack);
+    const dateFromStr = dateFrom.toISOString().split('T')[0];
+
+    const transactions = await getTransactions(accountId, dateFromStr);
+    const categorization = require('./categorization');
+
+    let syncedCount = 0;
+
+    for (const tx of transactions.booked || []) {
+      try {
+        const transaction = {
+          id: tx.transactionId || `${accountId}-${tx.bookingDate}-${tx.transactionAmount.amount}`,
+          accountId: accountId,
+          transactionDate: tx.valueDate || tx.bookingDate,
+          bookingDate: tx.bookingDate,
+          amount: parseFloat(tx.transactionAmount.amount),
+          currency: tx.transactionAmount.currency,
+          description: tx.remittanceInformationUnstructured || tx.additionalInformation || '',
+          counterpartyName: tx.debtorName || tx.creditorName || '',
+          categoryId: null
+        };
+
+        // Try to auto-categorize
+        const categoryId = await categorization.categorizeTransaction(transaction);
+        transaction.categoryId = categoryId;
+
+        await database.upsertTransaction(transaction);
+        syncedCount++;
+      } catch (error) {
+        console.error('Error syncing transaction:', error.message);
+      }
+    }
+
+    return syncedCount;
+  } catch (error) {
+    console.error(`Error syncing transactions for account ${accountId}:`, error.message);
+    throw error;
+  }
+}
+
+module.exports = {
+  initiateOAuth,
+  exchangeRequisition,
+  getAccountDetails,
+  getAccountBalances,
+  getTransactions,
+  syncAccounts,
+  syncAccountTransactions
+};

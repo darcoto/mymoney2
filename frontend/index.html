@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MyMoney² - Управление на лични финанси</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
+    <link rel="stylesheet" href="/css/main.css">
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <h1>💰 MyMoney<sup>2</sup></h1>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="#" data-page="dashboard" class="nav-link active">Табло</a></li>
+                <li><a href="#" data-page="transactions" class="nav-link">Транзакции</a></li>
+                <li><a href="#" data-page="categories" class="nav-link">Категории</a></li>
+                <li><a href="#" data-page="reports" class="nav-link">Отчети</a></li>
+                <li><a href="#" data-page="settings" class="nav-link">Настройки</a></li>
+            </ul>
+            <div class="nav-actions">
+                <button id="syncButton" class="btn btn-primary">🔄 Синхронизация</button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="container">
+        <!-- Dashboard Page -->
+        <div id="dashboard-page" class="page active">
+            <div class="page-header">
+                <h2>Общ преглед</h2>
+                <p class="page-subtitle">Текущо състояние на финансите</p>
+            </div>
+
+            <!-- Summary Cards -->
+            <div class="summary-cards">
+                <div class="card summary-card">
+                    <div class="card-icon" style="background-color: #4CAF50;">💵</div>
+                    <div class="card-content">
+                        <h3>Общ баланс</h3>
+                        <p class="amount" id="totalBalance">0.00 €</p>
+                        <small class="text-muted">Всички сметки</small>
+                    </div>
+                </div>
+                <div class="card summary-card">
+                    <div class="card-icon" style="background-color: #2196F3;">📥</div>
+                    <div class="card-content">
+                        <h3>Приходи (месец)</h3>
+                        <p class="amount positive" id="monthlyIncome">0.00 €</p>
+                        <small class="text-muted">Текущ месец</small>
+                    </div>
+                </div>
+                <div class="card summary-card">
+                    <div class="card-icon" style="background-color: #f44336;">📤</div>
+                    <div class="card-content">
+                        <h3>Разходи (месец)</h3>
+                        <p class="amount negative" id="monthlyExpenses">0.00 €</p>
+                        <small class="text-muted">Текущ месец</small>
+                    </div>
+                </div>
+                <div class="card summary-card">
+                    <div class="card-icon" style="background-color: #FF9800;">💰</div>
+                    <div class="card-content">
+                        <h3>Спестявания</h3>
+                        <p class="amount" id="monthlySavings">0.00 €</p>
+                        <small class="text-muted">Приходи - Разходи</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Row -->
+            <div class="charts-row">
+                <div class="card chart-card">
+                    <div class="card-header">
+                        <h3>Приходи vs Разходи (6 месеца)</h3>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="incomeExpenseChart"></canvas>
+                    </div>
+                </div>
+                <div class="card chart-card">
+                    <div class="card-header">
+                        <h3>Топ 5 Категории (месец)</h3>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="categoryPieChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Transactions -->
+            <div class="card">
+                <div class="card-header">
+                    <h3>Последни транзакции</h3>
+                    <a href="#" data-page="transactions" class="link">Виж всички</a>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table" id="recentTransactionsTable">
+                            <thead>
+                                <tr>
+                                    <th>Дата</th>
+                                    <th>Описание</th>
+                                    <th>Категория</th>
+                                    <th>Сума</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td colspan="4" class="text-center text-muted">
+                                        Няма транзакции
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Transactions Page -->
+        <div id="transactions-page" class="page">
+            <div class="page-header">
+                <h2>Транзакции</h2>
+                <p class="page-subtitle">Всички банкови операции</p>
+            </div>
+
+            <!-- Filters -->
+            <div class="card">
+                <div class="card-header" style="cursor: pointer; display: flex; justify-content: space-between; align-items: center;" id="filtersToggle">
+                    <h3 style="margin: 0;">🔍 Филтри</h3>
+                    <span id="filtersToggleIcon" style="font-size: 18px;">▼</span>
+                </div>
+                <div class="card-body" id="filtersBody" style="display: none;">
+                    <div class="filters-grid">
+                        <div class="filter-group">
+                            <label>От дата</label>
+                            <input type="date" id="filterStartDate" class="input">
+                        </div>
+                        <div class="filter-group">
+                            <label>До дата</label>
+                            <input type="date" id="filterEndDate" class="input">
+                        </div>
+                        <div class="filter-group">
+                            <label>Сметка</label>
+                            <select id="filterAccount" class="input">
+                                <option value="">Всички сметки</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Категория</label>
+                            <select id="filterCategory" class="input">
+                                <option value="">Всички категории</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Тип</label>
+                            <select id="filterType" class="input">
+                                <option value="">Всички</option>
+                                <option value="income">Приходи</option>
+                                <option value="expense">Разходи</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Търсене</label>
+                            <input type="text" id="filterSearch" class="input" placeholder="Описание или контрагент">
+                        </div>
+                        <div class="filter-group filter-actions">
+                            <button id="applyFilters" class="btn btn-primary">Приложи</button>
+                            <button id="clearFilters" class="btn btn-secondary">Изчисти</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transactions Table -->
+            <div class="card">
+                <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin: 0;">Списък с транзакции</h3>
+                    <span id="transactionsHeaderInfo" class="text-muted" style="font-size: 13px;"></span>
+                </div>
+                <div class="card-body">
+                    <div id="transactionsPaginationTop"></div>
+                    <div class="table-responsive">
+                        <table class="table" id="transactionsTable">
+                            <thead>
+                                <tr>
+                                    <th style="width: 90px;">Дата</th>
+                                    <th>Контрагент / Описание</th>
+                                    <th style="width: 150px;">Категория</th>
+                                    <th style="width: 120px; text-align: right;">Сума</th>
+                                    <th style="width: 80px; text-align: center;">Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td colspan="5" class="text-center text-muted">
+                                        Няма транзакции
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="pagination" id="transactionsPagination"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Categories Page -->
+        <div id="categories-page" class="page">
+            <div class="page-header">
+                <h2>Категории</h2>
+                <button id="addCategoryBtn" class="btn btn-primary">+ Нова категория</button>
+            </div>
+
+            <div class="categories-sections">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Разходи</h3>
+                    </div>
+                    <div class="card-body">
+                        <div id="expenseCategories" class="categories-list"></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Приходи</h3>
+                    </div>
+                    <div class="card-body">
+                        <div id="incomeCategories" class="categories-list"></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Трансфери</h3>
+                    </div>
+                    <div class="card-body">
+                        <div id="transferCategories" class="categories-list"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top: 20px;">
+                <div class="card-header">
+                    <h3>Правила за категоризиране</h3>
+                    <div>
+                        <button id="addRuleBtn" class="btn btn-secondary">+ Ново правило</button>
+                        <button id="applyRulesBtn" class="btn btn-primary">Приложи правила</button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table" id="rulesTable">
+                            <thead>
+                                <tr>
+                                    <th>Шаблон</th>
+                                    <th>Категория</th>
+                                    <th>Приоритет</th>
+                                    <th>Статус</th>
+                                    <th>Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reports Page -->
+        <div id="reports-page" class="page">
+            <div class="page-header">
+                <h2>Отчети</h2>
+            </div>
+
+            <!-- Report Type Tabs -->
+            <div class="card" style="margin-bottom: 20px;">
+                <div class="card-body" style="padding: 12px;">
+                    <div style="display: flex; gap: 12px;">
+                        <button class="btn btn-primary report-tab active" data-report="monthly">📊 Месечен отчет</button>
+                        <button class="btn btn-secondary report-tab" data-report="counterparty">🏢 По контрагенти</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Monthly Report Section -->
+            <div id="monthlyReportSection">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="filters-grid">
+                            <div class="filter-group">
+                                <label>Година</label>
+                                <select id="reportYear" class="input"></select>
+                            </div>
+                            <div class="filter-group">
+                                <label>Месец</label>
+                                <select id="reportMonth" class="input">
+                                    <option value="1">Януари</option>
+                                    <option value="2">Февруари</option>
+                                    <option value="3">Март</option>
+                                    <option value="4">Април</option>
+                                    <option value="5">Май</option>
+                                    <option value="6">Юни</option>
+                                    <option value="7">Юли</option>
+                                    <option value="8">Август</option>
+                                    <option value="9">Септември</option>
+                                    <option value="10">Октомври</option>
+                                    <option value="11">Ноември</option>
+                                    <option value="12">Декември</option>
+                                </select>
+                            </div>
+                            <div class="filter-group filter-actions">
+                                <button id="generateReport" class="btn btn-primary">Генерирай</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="reportResults" style="display: none;">
+                    <div class="summary-cards">
+                        <div class="card summary-card">
+                            <div class="card-content">
+                                <h3>Общо приходи</h3>
+                                <p class="amount positive" id="reportIncome">0.00 €</p>
+                            </div>
+                        </div>
+                        <div class="card summary-card">
+                            <div class="card-content">
+                                <h3>Общо разходи</h3>
+                                <p class="amount negative" id="reportExpenses">0.00 €</p>
+                            </div>
+                        </div>
+                        <div class="card summary-card">
+                            <div class="card-content">
+                                <h3>Баланс</h3>
+                                <p class="amount" id="reportBalance">0.00 €</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Разбивка по категории</h3>
+                        </div>
+                        <div class="card-body">
+                            <canvas id="reportCategoryChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Counterparty Report Section -->
+            <div id="counterpartyReportSection" style="display: none;">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="filters-grid">
+                            <div class="filter-group">
+                                <label>От дата</label>
+                                <input type="date" id="counterpartyStartDate" class="input">
+                            </div>
+                            <div class="filter-group">
+                                <label>До дата</label>
+                                <input type="date" id="counterpartyEndDate" class="input">
+                            </div>
+                            <div class="filter-group filter-actions">
+                                <button id="generateCounterpartyReport" class="btn btn-primary">Генерирай</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Справка по контрагенти</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table" id="counterpartyTable">
+                                <thead>
+                                    <tr>
+                                        <th>Контрагент</th>
+                                        <th style="text-align: right;">Брой транзакции</th>
+                                        <th style="text-align: right;">Приходи</th>
+                                        <th style="text-align: right;">Разходи</th>
+                                        <th style="text-align: right;">Нето</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td colspan="5" class="text-center text-muted">Натиснете "Генерирай" за да видите справката</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Page -->
+        <div id="settings-page" class="page">
+            <div class="page-header">
+                <h2>Настройки</h2>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>GoCardless свързване</h3>
+                </div>
+                <div class="card-body">
+                    <div id="authStatus" class="auth-status">
+                        <p>Статус: <span id="connectionStatus" class="status-badge">Проверка...</span></p>
+                    </div>
+                    <p class="text-muted" style="margin: 10px 0;">
+                        GoCardless ви позволява да свързвате банкови сметки и автоматично да импортирате транзакции.
+                    </p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Банкови връзки (Requisitions)</h3>
+                    <button id="addBankBtn" class="btn btn-primary">+ Добави банка</button>
+                </div>
+                <div class="card-body">
+                    <div id="requisitionsList">
+                        <p class="text-muted">Зареждане...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Банкови сметки</h3>
+                </div>
+                <div class="card-body">
+                    <div id="accountsList">
+                        <p class="text-muted">Няма свързани сметки</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Синхронизация</h3>
+                </div>
+                <div class="card-body">
+                    <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                        <button id="syncAccountsBtn" class="btn btn-primary">🔄 Синхронизирай сметки</button>
+                        <button id="syncTransactionsBtn" class="btn btn-primary">🔄 Синхронизирай транзакции</button>
+                    </div>
+                    <div id="syncStatus" style="margin-top: 12px;"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Архивиране</h3>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted" style="margin-bottom: 12px;">Създайте резервно копие на базата данни.</p>
+                    <button id="backupBtn" class="btn btn-secondary">💾 Създай backup</button>
+                    <div id="backupStatus" style="margin-top: 12px;"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>За приложението</h3>
+                </div>
+                <div class="card-body">
+                    <p><strong>MyMoney<sup>2</sup></strong> - Управление на лични финанси</p>
+                    <p>Версия: 1.0.0</p>
+                    <p>Интеграция с GoCardless Bank Account Data API</p>
+                    <p style="margin-top: 12px;">
+                        <button id="toggleLogsBtn" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px;">
+                            📋 Покажи логове
+                        </button>
+                    </p>
+                </div>
+            </div>
+
+            <div class="card" id="logsCard" style="display: none;">
+                <div class="card-header">
+                    <h3>📋 Системни логове</h3>
+                    <button id="refreshLogsBtn" class="btn btn-secondary">Обнови</button>
+                </div>
+                <div class="card-body">
+                    <div id="logsContent" style="font-family: monospace; font-size: 11px; white-space: pre-wrap; background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; max-height: 400px; overflow-y: auto;">
+                        Зареждане...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Modal for editing category/notes -->
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">Заглавие</h3>
+                <span class="modal-close">&times;</span>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+            <div class="modal-footer">
+                <button id="modalCancel" class="btn btn-secondary">Отказ</button>
+                <button id="modalSave" class="btn btn-primary">Запази</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading spinner -->
+    <div id="loader" class="loader" style="display: none;">
+        <div class="spinner"></div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/js/api-client.js"></script>
+    <script src="/js/charts.js"></script>
+    <script src="/js/dashboard.js"></script>
+    <script src="/js/transactions.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>
