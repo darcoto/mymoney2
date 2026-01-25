@@ -62,6 +62,13 @@ class APIClient {
         return this.request(endpoint);
     }
 
+    async createTransaction(transaction) {
+        return this.request('/transactions', {
+            method: 'POST',
+            body: JSON.stringify(transaction)
+        });
+    }
+
     async updateTransactionCategory(id, categoryId) {
         return this.request(`/transactions/${id}/category`, {
             method: 'PUT',
@@ -152,6 +159,10 @@ class APIClient {
     // Reports
     async getMonthlyReport(year, month) {
         return this.request(`/reports/monthly?year=${year}&month=${month}`);
+    }
+
+    async getLast12MonthsReport() {
+        return this.request('/reports/last-12-months');
     }
 
     async getCategoryBreakdown(startDate, endDate, type = null) {

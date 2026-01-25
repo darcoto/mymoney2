@@ -89,11 +89,13 @@ class Dashboard {
             const top5 = categoryData.slice(0, 5);
             const pieData = {
                 labels: top5.map(c => c.name),
-                values: top5.map(c => c.total),
+                values: top5.map(c => c.expenses || 0),
                 colors: top5.map(c => c.color || '#999')
             };
 
-            charts.createCategoryPieChart('categoryPieChart', pieData);
+            if (pieData.values.some(v => v > 0)) {
+                charts.createCategoryPieChart('categoryPieChart', pieData);
+            }
 
         } catch (error) {
             console.error('Error loading charts:', error);
@@ -134,12 +136,13 @@ class Dashboard {
 
     async loadRecentTransactions() {
         try {
-            const transactions = await api.getTransactions({ limit: 10, offset: 0 });
+            const result = await api.getTransactions({ limit: 10, offset: 0 });
+            const transactions = result.transactions || result;
 
             const tbody = document.querySelector('#recentTransactionsTable tbody');
             tbody.innerHTML = '';
 
-            if (transactions.length === 0) {
+            if (!transactions || transactions.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Няма транзакции</td></tr>';
                 return;
             }

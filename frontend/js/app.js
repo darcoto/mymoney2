@@ -2,7 +2,8 @@
 
 // Utility functions
 function formatCurrency(amount) {
-    const formatted = Math.abs(amount).toFixed(2);
+    const absAmount = Math.abs(amount);
+    const formatted = absAmount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
     const sign = amount < 0 ? '-' : '';
     return `${sign}${formatted} €`;
 }
@@ -29,6 +30,78 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+
+// Table sorting functionality
+function makeTableSortable(tableId) {
+    const table = document.getElementById(tableId);
+    if (!table) return;
+
+    const headers = table.querySelectorAll('thead th');
+    headers.forEach((header, index) => {
+        // Skip if header has no sortable attribute or is the first column (name/category)
+        if (header.dataset.sortable === 'false') return;
+        
+        header.style.cursor = 'pointer';
+        header.style.userSelect = 'none';
+        
+        // Add sort indicator
+        if (!header.querySelector('.sort-indicator')) {
+            header.innerHTML += ' <span class="sort-indicator" style="opacity: 0.5;">↕</span>';
+        }
+
+        header.addEventListener('click', () => {
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            
+            // Determine sort direction
+            const currentDir = header.dataset.sortDir || 'none';
+            const newDir = currentDir === 'asc' ? 'desc' : 'asc';
+            
+            // Reset all headers
+            headers.forEach(h => {
+                h.dataset.sortDir = 'none';
+                const indicator = h.querySelector('.sort-indicator');
+                if (indicator) indicator.textContent = '↕';
+            });
+            
+            // Set current header
+            header.dataset.sortDir = newDir;
+            const indicator = header.querySelector('.sort-indicator');
+            if (indicator) indicator.textContent = newDir === 'asc' ? '↑' : '↓';
+
+            // Sort rows
+            rows.sort((a, b) => {
+                const aCell = a.cells[index];
+                const bCell = b.cells[index];
+                
+                if (!aCell || !bCell) return 0;
+                
+                let aVal = aCell.textContent.trim().replace(/[€\s]/g, '').replace(',', '.');
+                let bVal = bCell.textContent.trim().replace(/[€\s]/g, '').replace(',', '.');
+                
+                // Check if numeric
+                const aNum = parseFloat(aVal.replace('-', ''));
+                const bNum = parseFloat(bVal.replace('-', ''));
+                
+                if (!isNaN(aNum) && !isNaN(bNum)) {
+                    // Handle negative values
+                    const aFinal = aVal.startsWith('-') ? -aNum : aNum;
+                    const bFinal = bVal.startsWith('-') ? -bNum : bNum;
+                    return newDir === 'asc' ? aFinal - bFinal : bFinal - aFinal;
+                }
+                
+                // String comparison
+                return newDir === 'asc' 
+                    ? aVal.localeCompare(bVal, 'bg') 
+                    : bVal.localeCompare(aVal, 'bg');
+            });
+
+            // Re-append sorted rows
+            rows.forEach(row => tbody.appendChild(row));
+        });
+    });
 }
 
 function showLoader() {
@@ -77,7 +150,7 @@ function showNotification(message, type = 'info') {
 }
 
 // Page navigation
-function navigateToPage(pageName) {
+function navigateToPage(pageName, updateHash = true) {
     // Hide all pages
     document.querySelectorAll('.page').forEach(page => {
         page.classList.remove('active');
@@ -97,6 +170,11 @@ function navigateToPage(pageName) {
     const activeLink = document.querySelector(`[data-page="${pageName}"]`);
     if (activeLink) {
         activeLink.classList.add('active');
+    }
+
+    // Update URL hash (without triggering hashchange if already correct)
+    if (updateHash && window.location.hash !== `#${pageName}`) {
+        history.pushState(null, '', `#${pageName}`);
     }
 
     // Load page-specific content
@@ -690,15 +768,8 @@ async function loadReportsPage() {
     const currentMonth = new Date().getMonth() + 1;
     document.getElementById('reportMonth').value = currentMonth;
 
-    // Set default date range for counterparty report (current month)
-    const now = new Date();
-    const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    document.getElementById('counterpartyStartDate').value = formatDate(firstDayOfMonth);
-    document.getElementById('counterpartyEndDate').value = formatDate(now);
-
-    // Attach generate buttons
+    // Attach generate button
     document.getElementById('generateReport').onclick = generateReport;
-    document.getElementById('generateCounterpartyReport').onclick = generateCounterpartyReport;
 
     // Report tab switching
     document.querySelectorAll('.report-tab').forEach(tab => {
@@ -717,10 +788,11 @@ async function loadReportsPage() {
             const reportType = tab.dataset.report;
             if (reportType === 'monthly') {
                 document.getElementById('monthlyReportSection').style.display = 'block';
-                document.getElementById('counterpartyReportSection').style.display = 'none';
-            } else if (reportType === 'counterparty') {
+                document.getElementById('yearlyReportSection').style.display = 'none';
+            } else if (reportType === 'yearly') {
                 document.getElementById('monthlyReportSection').style.display = 'none';
-                document.getElementById('counterpartyReportSection').style.display = 'block';
+                document.getElementById('yearlyReportSection').style.display = 'block';
+                generateYearlyReport();
             }
         });
     });
@@ -729,6 +801,9 @@ async function loadReportsPage() {
 async function generateReport() {
     const year = document.getElementById('reportYear').value;
     const month = document.getElementById('reportMonth').value;
+
+    // Store for category click handler
+    window.currentReportPeriod = { year, month };
 
     try {
         showLoader();
@@ -749,16 +824,142 @@ async function generateReport() {
         if (balance > 0) balanceEl.classList.add('positive');
         else if (balance < 0) balanceEl.classList.add('negative');
 
-        // Render chart
-        const breakdown = report.categoryBreakdown || [];
-        if (breakdown.length > 0) {
-            const chartData = {
-                labels: breakdown.map(c => c.name),
-                values: breakdown.map(c => c.total),
-                colors: breakdown.map(c => c.color || '#999')
-            };
-            charts.createCategoryBarChart('reportCategoryChart', chartData);
+        // Render category table
+        const categoryBreakdown = report.categoryBreakdown || [];
+        const categoryTbody = document.querySelector('#reportCategoryTable tbody');
+        const categoryTfoot = document.querySelector('#reportCategoryTable tfoot');
+
+        if (categoryBreakdown.length === 0) {
+            categoryTbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Няма данни</td></tr>';
+            categoryTfoot.innerHTML = '';
+        } else {
+            let totalCount = 0, totalIncome = 0, totalExpenses = 0, totalNet = 0;
+
+            categoryTbody.innerHTML = categoryBreakdown.map(row => {
+                totalCount += row.count || 0;
+                totalIncome += row.income || 0;
+                totalExpenses += row.expenses || 0;
+                totalNet += row.net || 0;
+
+                return `
+                    <tr>
+                        <td>
+                            <span class="category-badge category-clickable" style="background-color: ${row.color}; cursor: pointer;" 
+                                  data-category-id="${row.id}" data-category-name="${escapeHtml(row.name)}"
+                                  onclick="showCategoryTransactions(${row.id}, '${escapeHtml(row.name).replace(/'/g, "\\'")}')">
+                                ${escapeHtml(row.name)}
+                            </span>
+                        </td>
+                        <td style="text-align: right;">${row.count}</td>
+                        <td style="text-align: right;" class="positive">${row.income > 0 ? formatCurrency(row.income) : '-'}</td>
+                        <td style="text-align: right;" class="negative">${row.expenses > 0 ? formatCurrency(row.expenses) : '-'}</td>
+                        <td style="text-align: right;" class="${row.net >= 0 ? 'positive' : 'negative'}">${formatCurrency(row.net)}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            categoryTfoot.innerHTML = `
+                <tr>
+                    <td style="text-align: right;">Тотал:</td>
+                    <td style="text-align: right;">${totalCount}</td>
+                    <td style="text-align: right;" class="positive">${formatCurrency(totalIncome)}</td>
+                    <td style="text-align: right;" class="negative">${formatCurrency(totalExpenses)}</td>
+                    <td style="text-align: right;" class="${totalNet >= 0 ? 'positive' : 'negative'}">${formatCurrency(totalNet)}</td>
+                </tr>
+            `;
         }
+
+        // Render counterparty table
+        const counterpartyBreakdown = report.counterpartyBreakdown || [];
+        const counterpartyTbody = document.querySelector('#reportCounterpartyTable tbody');
+        const counterpartyTfoot = document.querySelector('#reportCounterpartyTable tfoot');
+
+        if (counterpartyBreakdown.length === 0) {
+            counterpartyTbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Няма данни</td></tr>';
+            counterpartyTfoot.innerHTML = '';
+        } else {
+            let totalCount = 0, totalIncome = 0, totalExpenses = 0, totalNet = 0;
+
+            counterpartyTbody.innerHTML = counterpartyBreakdown.map(row => {
+                totalCount += row.transaction_count || 0;
+                totalIncome += row.total_income || 0;
+                totalExpenses += row.total_expenses || 0;
+                totalNet += row.net_amount || 0;
+
+                const displayName = row.display_name || row.counterparty_name;
+
+                return `
+                    <tr>
+                        <td>
+                            <a href="https://www.google.com/search?q=${encodeURIComponent(row.counterparty_name)}" target="_blank" rel="noopener" style="color: inherit; text-decoration: underline dotted;" title="Търси в Google">
+                                ${escapeHtml(displayName)}
+                            </a>
+                        </td>
+                        <td style="text-align: right;">${row.transaction_count}</td>
+                        <td style="text-align: right;" class="positive">${row.total_income > 0 ? formatCurrency(row.total_income) : '-'}</td>
+                        <td style="text-align: right;" class="negative">${row.total_expenses > 0 ? formatCurrency(row.total_expenses) : '-'}</td>
+                        <td style="text-align: right;" class="${row.net_amount >= 0 ? 'positive' : 'negative'}">${formatCurrency(row.net_amount)}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            counterpartyTfoot.innerHTML = `
+                <tr>
+                    <td style="text-align: right;">Тотал:</td>
+                    <td style="text-align: right;">${totalCount}</td>
+                    <td style="text-align: right;" class="positive">${formatCurrency(totalIncome)}</td>
+                    <td style="text-align: right;" class="negative">${formatCurrency(totalExpenses)}</td>
+                    <td style="text-align: right;" class="${totalNet >= 0 ? 'positive' : 'negative'}">${formatCurrency(totalNet)}</td>
+                </tr>
+            `;
+        }
+
+        // Render account table
+        const accountBreakdown = report.accountBreakdown || [];
+        const accountTbody = document.querySelector('#reportAccountTable tbody');
+        const accountTfoot = document.querySelector('#reportAccountTable tfoot');
+
+        if (accountBreakdown.length === 0) {
+            accountTbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Няма данни</td></tr>';
+            accountTfoot.innerHTML = '';
+        } else {
+            let totalCount = 0, totalIncome = 0, totalExpenses = 0, totalNet = 0;
+
+            accountTbody.innerHTML = accountBreakdown.map(row => {
+                totalCount += row.count || 0;
+                totalIncome += row.income || 0;
+                totalExpenses += row.expenses || 0;
+                totalNet += row.net || 0;
+
+                const accountName = row.custom_name || row.name || 'Неизвестна';
+                const bankName = row.institution_name || '';
+
+                return `
+                    <tr>
+                        <td>${escapeHtml(accountName)}${bankName ? ` <span style="color: var(--text-muted);">(${escapeHtml(bankName)})</span>` : ''}</td>
+                        <td style="text-align: right;">${row.count}</td>
+                        <td style="text-align: right;" class="positive">${row.income > 0 ? formatCurrency(row.income) : '-'}</td>
+                        <td style="text-align: right;" class="negative">${row.expenses > 0 ? formatCurrency(row.expenses) : '-'}</td>
+                        <td style="text-align: right;" class="${row.net >= 0 ? 'positive' : 'negative'}">${formatCurrency(row.net)}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            accountTfoot.innerHTML = `
+                <tr>
+                    <td style="text-align: right;">Тотал:</td>
+                    <td style="text-align: right;">${totalCount}</td>
+                    <td style="text-align: right;" class="positive">${formatCurrency(totalIncome)}</td>
+                    <td style="text-align: right;" class="negative">${formatCurrency(totalExpenses)}</td>
+                    <td style="text-align: right;" class="${totalNet >= 0 ? 'positive' : 'negative'}">${formatCurrency(totalNet)}</td>
+                </tr>
+            `;
+        }
+
+        // Make tables sortable
+        makeTableSortable('reportCategoryTable');
+        makeTableSortable('reportCounterpartyTable');
+        makeTableSortable('reportAccountTable');
 
     } catch (error) {
         console.error('Error generating report:', error);
@@ -768,40 +969,247 @@ async function generateReport() {
     }
 }
 
-async function generateCounterpartyReport() {
-    const startDate = document.getElementById('counterpartyStartDate').value;
-    const endDate = document.getElementById('counterpartyEndDate').value;
+
+async function showCategoryTransactions(categoryId, categoryName) {
+    const period = window.currentReportPeriod;
+    if (!period) return;
+
+    const startDate = `${period.year}-${String(period.month).padStart(2, '0')}-01`;
+    const endOfMonth = new Date(period.year, period.month, 0);
+    const endDate = `${period.year}-${String(period.month).padStart(2, '0')}-${endOfMonth.getDate()}`;
 
     try {
         showLoader();
 
-        const report = await api.getCounterpartyReport(startDate, endDate);
-        const tbody = document.querySelector('#counterpartyTable tbody');
+        const params = {
+            start_date: startDate,
+            end_date: endDate,
+            category_id: categoryId === null ? 'uncategorized' : categoryId,
+            limit: 500
+        };
+
+        const result = await api.getTransactions(params);
+        const transactions = result.transactions || result;
+
+        const modal = document.getElementById('modal');
+        const modalContent = modal.querySelector('.modal-content');
+        modalContent.style.maxWidth = '800px';
+
+        document.getElementById('modalTitle').textContent = `Транзакции: ${categoryName}`;
+        document.getElementById('modalSave').style.display = 'none';
+        document.getElementById('modalCancel').textContent = 'Затвори';
+
+        if (!transactions || transactions.length === 0) {
+            document.getElementById('modalBody').innerHTML = '<p class="text-muted text-center">Няма транзакции за този период</p>';
+        } else {
+            let totalAmount = 0;
+            const rows = transactions.map(tx => {
+                totalAmount += tx.amount;
+                return `
+                    <tr>
+                        <td style="white-space: nowrap;">${formatDate(new Date(tx.transaction_date))}</td>
+                        <td>${escapeHtml(tx.counterparty_name || tx.description || '-')}</td>
+                        <td class="${tx.amount >= 0 ? 'positive' : 'negative'}" style="text-align: right; font-weight: 600;">
+                            ${formatCurrency(tx.amount)}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            document.getElementById('modalBody').innerHTML = `
+                <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th style="width: 100px;">Дата</th>
+                                <th>Контрагент</th>
+                                <th style="width: 120px; text-align: right;">Сума</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                        <tfoot style="font-weight: 600; background: #f5f5f5;">
+                            <tr>
+                                <td colspan="2" style="text-align: right;">Тотал (${transactions.length} транзакции):</td>
+                                <td class="${totalAmount >= 0 ? 'positive' : 'negative'}" style="text-align: right;">${formatCurrency(totalAmount)}</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            `;
+        }
+
+        modal.classList.add('active');
+
+        document.getElementById('modalCancel').onclick = () => {
+            modalContent.style.maxWidth = '';
+            modal.classList.remove('active');
+        };
+        document.querySelector('.modal-close').onclick = () => {
+            modalContent.style.maxWidth = '';
+            modal.classList.remove('active');
+        };
+
+    } catch (error) {
+        console.error('Error loading category transactions:', error);
+        showNotification('Грешка при зареждане на транзакции', 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+
+async function showAddManualTransactionModal() {
+    try {
+        showLoader();
+        const categories = await api.getCategories();
+        hideLoader();
+
+        const modal = document.getElementById('modal');
+        document.getElementById('modalTitle').textContent = 'Добави кеш транзакция';
+        document.getElementById('modalSave').style.display = 'inline-block';
+        document.getElementById('modalCancel').textContent = 'Отказ';
+
+        const today = new Date().toISOString().split('T')[0];
+
+        const categoryOptions = categories
+            .map(cat => `<option value="${cat.id}">${escapeHtml(cat.name)} (${cat.type === 'expense' ? 'Разход' : cat.type === 'income' ? 'Приход' : 'Трансфер'})</option>`)
+            .join('');
+
+        document.getElementById('modalBody').innerHTML = `
+            <div class="filter-group">
+                <label>Дата *</label>
+                <input type="date" id="manualTxDate" class="input" value="${today}" required>
+            </div>
+            <div class="filter-group">
+                <label>Контрагент</label>
+                <input type="text" id="manualTxCounterparty" class="input" placeholder="Име на магазин, лице и т.н.">
+            </div>
+            <div class="filter-group">
+                <label>Сума * (отрицателна за разход)</label>
+                <input type="number" id="manualTxAmount" class="input" step="0.01" placeholder="-50.00" required>
+                <small class="text-muted">Използвайте минус за разходи (напр. -25.50)</small>
+            </div>
+            <div class="filter-group">
+                <label>Категория</label>
+                <select id="manualTxCategory" class="input">
+                    <option value="">Без категория</option>
+                    ${categoryOptions}
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Описание</label>
+                <input type="text" id="manualTxDescription" class="input" placeholder="Допълнителни бележки">
+            </div>
+        `;
+
+        modal.classList.add('active');
+
+        const saveHandler = async () => {
+            const transactionDate = document.getElementById('manualTxDate').value;
+            const counterpartyName = document.getElementById('manualTxCounterparty').value.trim();
+            const amount = parseFloat(document.getElementById('manualTxAmount').value);
+            const categoryId = document.getElementById('manualTxCategory').value;
+            const description = document.getElementById('manualTxDescription').value.trim();
+
+            if (!transactionDate) {
+                showNotification('Моля, въведете дата', 'error');
+                return;
+            }
+            if (isNaN(amount)) {
+                showNotification('Моля, въведете валидна сума', 'error');
+                return;
+            }
+
+            try {
+                showLoader();
+                await api.createTransaction({
+                    transactionDate,
+                    counterpartyName: counterpartyName || null,
+                    amount,
+                    categoryId: categoryId ? parseInt(categoryId) : null,
+                    description: description || null
+                });
+
+                modal.classList.remove('active');
+                showNotification('Транзакцията е добавена успешно', 'success');
+
+                // Refresh transactions list if on transactions page
+                if (typeof transactionsPage !== 'undefined') {
+                    await transactionsPage.loadTransactions();
+                }
+            } catch (error) {
+                showNotification('Грешка: ' + error.message, 'error');
+            } finally {
+                hideLoader();
+            }
+        };
+
+        document.getElementById('modalSave').onclick = saveHandler;
+        document.getElementById('modalCancel').onclick = () => modal.classList.remove('active');
+        document.querySelector('.modal-close').onclick = () => modal.classList.remove('active');
+
+    } catch (error) {
+        hideLoader();
+        showNotification('Грешка при зареждане: ' + error.message, 'error');
+    }
+}
+
+window.showCategoryTransactions = showCategoryTransactions;
+
+
+async function generateYearlyReport() {
+    try {
+        showLoader();
+
+        const report = await api.getLast12MonthsReport();
+
+        const monthNames = ['', 'Януари', 'Февруари', 'Март', 'Април', 'Май', 'Юни', 
+                           'Юли', 'Август', 'Септември', 'Октомври', 'Ноември', 'Декември'];
+
+        const tbody = document.querySelector('#yearlyReportTable tbody');
+        const tfoot = document.querySelector('#yearlyReportTable tfoot');
 
         if (!report || report.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Няма данни за избрания период</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Няма данни</td></tr>';
+            tfoot.innerHTML = '';
             return;
         }
 
-        tbody.innerHTML = report.map(row => `
-            <tr>
-                <td>
-                    <a href="https://www.google.com/search?q=${encodeURIComponent(row.counterparty_name)}" target="_blank" rel="noopener" style="color: inherit; text-decoration: underline dotted;" title="Търси в Google">
-                        ${escapeHtml(row.counterparty_name)}
-                    </a>
-                </td>
-                <td style="text-align: right;">${row.transaction_count}</td>
-                <td style="text-align: right;" class="positive">${row.total_income > 0 ? formatCurrency(row.total_income) : '-'}</td>
-                <td style="text-align: right;" class="negative">${row.total_expenses > 0 ? formatCurrency(row.total_expenses) : '-'}</td>
-                <td style="text-align: right;" class="${row.net_amount >= 0 ? 'positive' : 'negative'}">${formatCurrency(row.net_amount)}</td>
-            </tr>
-        `).join('');
+        let totalCount = 0, totalIncome = 0, totalExpenses = 0, totalNet = 0;
 
-        showNotification(`Генерирани ${report.length} контрагента`, 'success');
+        tbody.innerHTML = report.map(row => {
+            totalCount += row.count || 0;
+            totalIncome += row.income || 0;
+            totalExpenses += row.expenses || 0;
+            totalNet += row.net || 0;
+
+            return `
+                <tr>
+                    <td>${monthNames[row.month]} ${row.year}</td>
+                    <td style="text-align: right;">${row.count}</td>
+                    <td style="text-align: right;" class="positive">${row.income > 0 ? formatCurrency(row.income) : '-'}</td>
+                    <td style="text-align: right;" class="negative">${row.expenses > 0 ? formatCurrency(row.expenses) : '-'}</td>
+                    <td style="text-align: right;" class="${row.net >= 0 ? 'positive' : 'negative'}">${formatCurrency(row.net)}</td>
+                </tr>
+            `;
+        }).join('');
+
+        tfoot.innerHTML = `
+            <tr>
+                <td style="text-align: right;">Тотал:</td>
+                <td style="text-align: right;">${totalCount}</td>
+                <td style="text-align: right;" class="positive">${formatCurrency(totalIncome)}</td>
+                <td style="text-align: right;" class="negative">${formatCurrency(totalExpenses)}</td>
+                <td style="text-align: right;" class="${totalNet >= 0 ? 'positive' : 'negative'}">${formatCurrency(totalNet)}</td>
+            </tr>
+        `;
+
+        // Make table sortable
+        makeTableSortable('yearlyReportTable');
 
     } catch (error) {
-        console.error('Error generating counterparty report:', error);
-        showNotification('Грешка при генериране на справка', 'error');
+        console.error('Error generating yearly report:', error);
+        showNotification('Грешка при генериране на отчет', 'error');
     } finally {
         hideLoader();
     }
@@ -1145,15 +1553,123 @@ window.editAccountName = editAccountName;
 
 // Sync functionality - sync all (accounts + transactions)
 async function syncData() {
+    const modal = document.getElementById('modal');
+    const modalContent = modal.querySelector('.modal-content');
+    
+    document.getElementById('modalTitle').textContent = 'Синхронизация на данни';
+    document.getElementById('modalSave').style.display = 'none';
+    document.getElementById('modalCancel').style.display = 'none';
+    document.querySelector('.modal-close').style.display = 'none';
+    
+    document.getElementById('modalBody').innerHTML = `
+        <div id="syncProgress" style="min-height: 150px;">
+            <div style="text-align: center; padding: 20px;">
+                <div class="spinner" style="margin: 0 auto 15px;"></div>
+                <p>Стартиране на синхронизация...</p>
+            </div>
+        </div>
+    `;
+    
+    modal.classList.add('active');
+    
+    const progressDiv = document.getElementById('syncProgress');
+    let syncResults = [];
+    
     try {
-        await syncAccounts();
-        // Small delay between syncs
-        setTimeout(async () => {
-            await syncTransactions();
-        }, 1000);
+        // Sync accounts
+        progressDiv.innerHTML = `
+            <div style="padding: 10px;">
+                <p><strong>⏳ Синхронизиране на сметки...</strong></p>
+            </div>
+        `;
+        
+        const accountResult = await api.syncAccounts();
+        
+        if (accountResult.success) {
+            syncResults.push(`<p>✅ <strong>Синхронизирани сметки:</strong> ${accountResult.count}</p>`);
+        }
+        
+        // Display intermediate results
+        progressDiv.innerHTML = `
+            <div style="padding: 10px;">
+                ${syncResults.join('')}
+                <p style="margin-top: 15px;"><strong>⏳ Синхронизиране на транзакции...</strong></p>
+            </div>
+        `;
+        
+        // Small delay
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Sync transactions
+        const txResult = await api.syncTransactions();
+        
+        if (txResult.success) {
+            // Get breakdown by bank
+            const accounts = await api.getAccounts();
+            const bankBreakdown = {};
+            
+            // Group accounts by bank
+            accounts.forEach(acc => {
+                const bankName = acc.institution_name || 'Неизвестна банка';
+                if (!bankBreakdown[bankName]) {
+                    bankBreakdown[bankName] = { accounts: 0, accountNames: [] };
+                }
+                bankBreakdown[bankName].accounts++;
+                bankBreakdown[bankName].accountNames.push(acc.custom_name || acc.name);
+            });
+            
+            syncResults.push(`<p>✅ <strong>Синхронизирани транзакции:</strong> ${txResult.transactionsSynced}</p>`);
+            syncResults.push(`<hr style="margin: 15px 0; border: none; border-top: 1px solid #e0e0e0;">`);
+            
+            // Add bank breakdown
+            Object.entries(bankBreakdown).forEach(([bank, data]) => {
+                syncResults.push(`
+                    <div style="margin-bottom: 10px; padding: 10px; background: #f5f5f5; border-radius: 6px;">
+                        <p style="margin: 0 0 5px 0;"><strong>🏦 ${escapeHtml(bank)}</strong></p>
+                        <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">
+                            Брой сметки: ${data.accounts}
+                        </p>
+                    </div>
+                `);
+            });
+        }
+        
+        // Show final results
+        progressDiv.innerHTML = `
+            <div style="padding: 10px;">
+                ${syncResults.join('')}
+                <p style="margin-top: 15px; color: var(--success-color); font-weight: 600;">
+                    ✅ Синхронизацията завърши успешно!
+                </p>
+            </div>
+        `;
+        
+        showNotification('Синхронизацията завърши успешно', 'success');
+        
+        // Refresh dashboard if visible
+        if (document.getElementById('dashboard-page').classList.contains('active')) {
+            dashboard.refresh();
+        }
+        
     } catch (error) {
         console.error('Sync error:', error);
+        progressDiv.innerHTML = `
+            <div style="padding: 10px;">
+                ${syncResults.join('')}
+                <p style="margin-top: 15px; color: var(--danger-color);">
+                    ❌ Грешка: ${escapeHtml(error.message)}
+                </p>
+            </div>
+        `;
+        showNotification('Грешка при синхронизация: ' + error.message, 'error');
     }
+    
+    // Show close button
+    document.getElementById('modalCancel').textContent = 'Затвори';
+    document.getElementById('modalCancel').style.display = 'inline-block';
+    document.querySelector('.modal-close').style.display = 'block';
+    document.getElementById('modalCancel').onclick = () => modal.classList.remove('active');
+    document.querySelector('.modal-close').onclick = () => modal.classList.remove('active');
 }
 
 // Logs functionality
@@ -1195,8 +1711,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
 
+    // Handle browser back/forward buttons
+    window.addEventListener('popstate', () => {
+        const hash = window.location.hash.replace('#', '') || 'dashboard';
+        navigateToPage(hash, false);
+    });
+
     // Sync button (main nav)
     document.getElementById('syncButton').addEventListener('click', syncData);
+
+    // Transactions page buttons
+    document.getElementById('addManualTransactionBtn')?.addEventListener('click', showAddManualTransactionModal);
 
     // Categories page buttons
     document.getElementById('addCategoryBtn')?.addEventListener('click', showAddCategoryModal);
@@ -1211,6 +1736,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('toggleLogsBtn')?.addEventListener('click', toggleLogsPanel);
     document.getElementById('refreshLogsBtn')?.addEventListener('click', loadLogs);
 
-    // Load initial page
-    await navigateToPage('dashboard');
+    // Load initial page from URL hash or default to dashboard
+    const initialPage = window.location.hash.replace('#', '') || 'dashboard';
+    await navigateToPage(initialPage);
 });

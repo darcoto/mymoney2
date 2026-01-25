@@ -26,8 +26,22 @@ function getDb() {
 
 // Log SQL query
 function logSql(query, params = []) {
-  const shortQuery = query.replace(/\s+/g, ' ').trim().substring(0, 200);
-  logger.debug(`[SQL] ${shortQuery}`, params.length > 0 ? { params } : null);
+  let formattedQuery = query.replace(/\s+/g, ' ').trim();
+  
+  // Replace ? placeholders with actual parameter values
+  if (params.length > 0) {
+    let paramIndex = 0;
+    formattedQuery = formattedQuery.replace(/\?/g, () => {
+      if (paramIndex >= params.length) return '?';
+      const value = params[paramIndex++];
+      if (value === null || value === undefined) return 'NULL';
+      if (typeof value === 'number') return value.toString();
+      // Escape single quotes in strings and wrap in quotes
+      return `'${String(value).replace(/'/g, "''")}'`;
+    });
+  }
+  
+  logger.debug(`[SQL] ${formattedQuery}`);
 }
 
 // Promisify database operations
@@ -164,6 +178,16 @@ async function initialize() {
         try {
           await runQuery('ALTER TABLE transactions ADD COLUMN original_currency TEXT');
         } catch (e) { /* Column already exists */ }
+
+        // Create special "Cash" account for manual transactions if it doesn't exist
+        const cashAccount = await getQuery("SELECT id FROM accounts WHERE id = 'CASH'");
+        if (!cashAccount) {
+          await runQuery(`
+            INSERT INTO accounts (id, name, custom_name, institution_name, currency, balance)
+            VALUES ('CASH', 'Кеш', 'Кеш', 'Ръчни транзакции', 'EUR', 0)
+          `);
+          console.log('Created CASH account for manual transactions');
+        }
 
         // Create counterparty aliases table
         await runQuery(`
@@ -323,9 +347,10 @@ async function getTransactions(filters = {}) {
     params.push(`%${filters.search}%`, `%${filters.search}%`, `%${filters.search}%`);
   }
 
-  // Get total count
-  const countResult = await getQuery(`SELECT COUNT(*) as total ${baseQuery}`, params);
-  const total = countResult?.total || 0;
+  // Get total count and sum
+  const statsResult = await getQuery(`SELECT COUNT(*) as total, SUM(t.amount) as totalAmount ${baseQuery}`, params);
+  const total = statsResult?.total || 0;
+  const totalAmount = statsResult?.totalAmount || 0;
 
   // Get transactions with pagination - include counterparty display name
   let query = `SELECT t.*, c.name as category_name, c.color as category_color, ca.display_name as counterparty_display_name ${baseQuery}`;
@@ -339,7 +364,7 @@ async function getTransactions(filters = {}) {
 
   const transactions = await allQuery(query, paginatedParams);
 
-  return { transactions, total };
+  return { transactions, total, totalAmount };
 }
 
 async function upsertTransaction(transaction) {
@@ -364,6 +389,22 @@ async function upsertTransaction(transaction) {
   }
 }
 
+
+async function createManualTransaction(transaction) {
+  // Generate unique ID for manual transactions
+  const id = `CASH_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  return await runQuery(
+    `INSERT INTO transactions (id, account_id, transaction_date, booking_date, amount,
+     currency, description, counterparty_name, category_id, raw_data)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, 'CASH', transaction.transactionDate, transaction.transactionDate,
+     transaction.amount, 'EUR', transaction.description || null,
+     transaction.counterpartyName || null, transaction.categoryId || null,
+     JSON.stringify({ type: 'manual', createdAt: new Date().toISOString() })]
+  );
+}
+
 async function updateTransactionCategory(id, categoryId) {
   return await runQuery('UPDATE transactions SET category_id = ? WHERE id = ?', [categoryId, id]);
 }
@@ -386,8 +427,9 @@ async function getTransactionStats(startDate, endDate) {
       SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as total_income,
       SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as total_expenses,
       COUNT(*) as total_transactions
-    FROM transactions
-    WHERE 1=1
+    FROM transactions t
+    INNER JOIN categories c ON c.id = t.category_id
+    WHERE c.type <> 'transfer'
   `;
   const params = [];
 
@@ -492,20 +534,59 @@ async function getMonthlyReport(year, month) {
 
   const stats = await getTransactionStats(startDate, endDateStr);
   const categoryBreakdown = await getCategoryBreakdown(startDate, endDateStr);
+  const counterpartyBreakdown = await getCounterpartyReport(startDate, endDateStr);
+  const accountBreakdown = await getAccountBreakdown(startDate, endDateStr);
 
   return {
     period: { year, month, startDate, endDate: endDateStr },
     stats,
-    categoryBreakdown
+    categoryBreakdown,
+    counterpartyBreakdown,
+    accountBreakdown
   };
 }
 
+
+async function getLast12MonthsReport() {
+  const months = [];
+  const now = new Date();
+  
+  for (let i = 0; i < 12; i++) {
+    const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+    const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+    const endOfMonth = new Date(year, month, 0);
+    const endDate = `${year}-${String(month).padStart(2, '0')}-${endOfMonth.getDate()}`;
+    
+    months.push({ year, month, startDate, endDate });
+  }
+  
+  const results = [];
+  for (const m of months) {
+    const stats = await getTransactionStats(m.startDate, m.endDate);
+    results.push({
+      year: m.year,
+      month: m.month,
+      count: stats.total_transactions || 0,
+      income: stats.total_income || 0,
+      expenses: stats.total_expenses || 0,
+      net: (stats.total_income || 0) - (stats.total_expenses || 0)
+    });
+  }
+  
+  return results;
+}
+
 async function getCategoryBreakdown(startDate, endDate, type = null, excludeTransfers = true) {
+  // Query for categorized transactions
   let query = `
     SELECT
       c.id, c.name, c.type, c.color,
-      SUM(ABS(t.amount)) as total,
-      COUNT(*) as count
+      COUNT(*) as count,
+      SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END) as income,
+      SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END) as expenses,
+      SUM(t.amount) as net
     FROM transactions t
     JOIN categories c ON t.category_id = c.id
     WHERE 1=1
@@ -526,13 +607,55 @@ async function getCategoryBreakdown(startDate, endDate, type = null, excludeTran
     query += ' AND c.type = ?';
     params.push(type);
   } else if (excludeTransfers) {
-    // Exclude transfer categories from reports by default
     query += " AND c.type != 'transfer'";
   }
 
-  query += ' GROUP BY c.id, c.name, c.type, c.color ORDER BY total DESC';
+  query += ' GROUP BY c.id, c.name, c.type, c.color';
 
-  return await allQuery(query, params);
+  const categorized = await allQuery(query, params);
+
+  // Query for uncategorized transactions
+  let uncatQuery = `
+    SELECT
+      COUNT(*) as count,
+      SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as income,
+      SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as expenses,
+      SUM(amount) as net
+    FROM transactions
+    WHERE category_id IS NULL
+  `;
+  const uncatParams = [];
+
+  if (startDate) {
+    uncatQuery += ' AND transaction_date >= ?';
+    uncatParams.push(startDate);
+  }
+
+  if (endDate) {
+    uncatQuery += ' AND transaction_date <= ?';
+    uncatParams.push(endDate);
+  }
+
+  const uncategorized = await getQuery(uncatQuery, uncatParams);
+
+  // Add uncategorized as a special category if there are any
+  if (uncategorized && uncategorized.count > 0) {
+    categorized.push({
+      id: null,
+      name: 'Без категория',
+      type: 'uncategorized',
+      color: '#999999',
+      count: uncategorized.count,
+      income: uncategorized.income || 0,
+      expenses: uncategorized.expenses || 0,
+      net: uncategorized.net || 0
+    });
+  }
+
+  // Sort by count descending
+  categorized.sort((a, b) => b.count - a.count);
+
+  return categorized;
 }
 
 // GoCardless token operations
@@ -601,6 +724,36 @@ async function getCounterpartyReport(startDate, endDate) {
   }));
 }
 
+
+async function getAccountBreakdown(startDate, endDate) {
+  let query = `
+    SELECT
+      a.id, a.custom_name, a.name, a.institution_name,
+      COUNT(*) as count,
+      SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END) as income,
+      SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END) as expenses,
+      SUM(t.amount) as net
+    FROM transactions t
+    JOIN accounts a ON t.account_id = a.id
+    WHERE 1=1
+  `;
+  const params = [];
+
+  if (startDate) {
+    query += ' AND t.transaction_date >= ?';
+    params.push(startDate);
+  }
+
+  if (endDate) {
+    query += ' AND t.transaction_date <= ?';
+    params.push(endDate);
+  }
+
+  query += ' GROUP BY a.id ORDER BY count DESC';
+
+  return await allQuery(query, params);
+}
+
 // Counterparty aliases operations
 async function getAllCounterpartyAliases() {
   return await allQuery('SELECT * FROM counterparty_aliases ORDER BY display_name');
@@ -637,6 +790,7 @@ module.exports = {
   updateAccountCustomName,
   getTransactions,
   upsertTransaction,
+  createManualTransaction,
   updateTransactionCategory,
   categorizeByCounterparty,
   updateTransactionNotes,
@@ -650,6 +804,7 @@ module.exports = {
   updateCategorizationRule,
   deleteCategorizationRule,
   getMonthlyReport,
+  getLast12MonthsReport,
   getCategoryBreakdown,
   getCounterpartyReport,
   getGoCardlessToken,

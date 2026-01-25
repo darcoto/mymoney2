@@ -5,6 +5,7 @@ class TransactionsPage {
         this.currentPage = 0;
         this.pageSize = 50;
         this.totalCount = 0;
+        this.totalAmount = 0;
         this.filters = {};
         this.transactions = [];
         this.categories = [];
@@ -108,9 +109,11 @@ class TransactionsPage {
             if (Array.isArray(result)) {
                 this.transactions = result;
                 this.totalCount = result.length;
+                this.totalAmount = 0;
             } else {
                 this.transactions = result.transactions || result;
                 this.totalCount = result.total || this.transactions.length;
+                this.totalAmount = result.totalAmount || 0;
             }
 
             this.renderTransactions();
@@ -138,6 +141,20 @@ class TransactionsPage {
                 : '';
         }
 
+        // Update footer with total amount
+        const tfoot = document.getElementById('transactionsTableFoot');
+        const totalAmountCell = document.getElementById('transactionsTotalAmount');
+        if (tfoot && totalAmountCell) {
+            if (this.transactions.length > 0) {
+                tfoot.style.display = '';
+                const amountClass = this.totalAmount >= 0 ? 'positive' : 'negative';
+                totalAmountCell.className = amountClass;
+                totalAmountCell.innerHTML = formatCurrency(this.totalAmount);
+            } else {
+                tfoot.style.display = 'none';
+            }
+        }
+
         if (this.transactions.length === 0) {
             tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Няма транзакции</td></tr>';
             return;
@@ -146,6 +163,7 @@ class TransactionsPage {
         this.transactions.forEach((tx, index) => {
             const account = this.accounts.find(a => a.id === tx.account_id);
             const accountName = account ? (account.custom_name || account.name) : '';
+            const bankName = account?.institution_name || '';
 
             // Use display name if available, otherwise original counterparty name
             const displayName = tx.counterparty_display_name || tx.counterparty_name;
@@ -161,8 +179,8 @@ class TransactionsPage {
                         ${tx.counterparty_name ? `<a href="https://www.google.com/search?q=${encodeURIComponent(tx.counterparty_name || displayName)}" target="_blank" rel="noopener" class="google-search-icon" style="opacity: 0; font-size: 12px; text-decoration: none; transition: opacity 0.2s;" title="${hasAlias ? 'Оригинал: ' + escapeHtml(tx.counterparty_name) + ' - Търси в Google' : 'Търси в Google'}" onclick="event.stopPropagation();">🔍</a>` : ''}
                         ${tx.counterparty_name ? `<span class="alias-btn" data-counterparty="${escapeHtml(tx.counterparty_name)}" data-display="${escapeHtml(tx.counterparty_display_name || '')}" onclick="event.stopPropagation(); transactionsPage.editCounterpartyAlias('${escapeHtml(tx.counterparty_name).replace(/'/g, "\\'")}', '${escapeHtml(tx.counterparty_display_name || '').replace(/'/g, "\\'")}')" style="cursor: pointer; font-size: 12px; opacity: 0; transition: opacity 0.2s;" title="Задай синоним">✏️</span>` : ''}
                     </div>
-                    <div style="font-size: 12px; color: var(--text-secondary); font-style: italic; margin-top: 2px;">
-                        ${escapeHtml(tx.description || '')}
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+                        ${bankName ? `<span style="font-weight: 500;">${escapeHtml(bankName)}</span>` : ''}${bankName && tx.description ? ' · ' : ''}${tx.description ? `<span style="font-style: italic;">${escapeHtml(tx.description)}</span>` : ''}
                     </div>
                 </td>
                 <td>

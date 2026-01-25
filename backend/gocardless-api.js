@@ -403,7 +403,7 @@ async function syncAccountTransactions(accountId, daysBack = 90) {
           originalAmount: originalCurrency !== 'EUR' ? originalAmount : null,
           originalCurrency: originalCurrency !== 'EUR' ? originalCurrency : null,
           description: tx.remittanceInformationUnstructured || tx.additionalInformation || '',
-          counterpartyName: tx.creditorName || '',
+          counterpartyName: tx.creditorName || (tx.remittanceInformationUnstructuredArray ? tx.remittanceInformationUnstructuredArray.join(' ') : '') || '',
           categoryId: null,
           rawData: JSON.stringify(tx)
         };

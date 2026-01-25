@@ -178,6 +178,28 @@ app.get('/api/transactions', async (req, res) => {
   }
 });
 
+app.post('/api/transactions', async (req, res) => {
+  try {
+    const { transactionDate, amount, counterpartyName, description, categoryId } = req.body;
+
+    if (!transactionDate || amount === undefined) {
+      return res.status(400).json({ error: 'Дата и сума са задължителни' });
+    }
+
+    const result = await database.createManualTransaction({
+      transactionDate,
+      amount: parseFloat(amount),
+      counterpartyName: counterpartyName || null,
+      description: description || null,
+      categoryId: categoryId ? parseInt(categoryId) : null
+    });
+
+    res.status(201).json({ success: true, id: result.lastID });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.put('/api/transactions/:id/category', async (req, res) => {
   try {
     const { categoryId } = req.body;
@@ -310,6 +332,15 @@ app.get('/api/reports/monthly', async (req, res) => {
   try {
     const { year, month } = req.query;
     const report = await database.getMonthlyReport(year, month);
+    res.json(report);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/reports/last-12-months', async (req, res) => {
+  try {
+    const report = await database.getLast12MonthsReport();
     res.json(report);
   } catch (error) {
     res.status(500).json({ error: error.message });
