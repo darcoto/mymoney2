@@ -14,11 +14,14 @@ MyMoney2 is a personal finance management application with GoCardless Bank Accou
 npm install          # Install dependencies
 npm start            # Start production server (http://localhost:3000)
 npm run dev          # Start with auto-reload (nodemon)
+npm run demo         # Start with demo database
+npm run seed-demo    # Create/reset demo database with sample data
 ```
 
 **Database inspection:**
 ```bash
-sqlite3 data/finance.db
+sqlite3 data/finance.db   # Production database
+sqlite3 data/demo.db      # Demo database
 ```
 
 ## Tech Stack
@@ -83,3 +86,4 @@ Required in `.env` (see `.env.example`):
 - `PORT` - Server port (default 3000)
 - `DATABASE_PATH` - SQLite location (default `./data/finance.db`)
 - `NODE_ENV` - Set to `development` for debug logging
+- `USE_DEMO_DB` - Set to `true` to use demo database (`./data/demo.db`)
