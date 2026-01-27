@@ -27,6 +27,7 @@
   },
   "devDependencies": {
     "cross-env": "^10.1.0",
-    "nodemon": "^3.0.1"
+    "nodemon": "^3.0.1",
+    "puppeteer": "^24.36.0"
   }
 }
