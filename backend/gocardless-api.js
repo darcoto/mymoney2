@@ -28,7 +28,17 @@ function logApiRequest(method, url, body = null) {
 
 // Log API response details
 function logApiResponse(method, url, status, data) {
+  // Log compact version to file
   logger.info(`[GoCardless API] <<< ${method} ${url} - Status: ${status}`, { response: data });
+
+  // Pretty print to console in development mode
+  if (config.nodeEnv === 'development' && data) {
+    try {
+      console.log(`[GoCardless API] Response data:\n${JSON.stringify(data, null, 2)}`);
+    } catch (e) {
+      // Ignore stringify errors
+    }
+  }
 }
 
 // Get or refresh access token
@@ -408,12 +418,20 @@ async function syncAccountTransactions(accountId, daysBack = 90) {
           rawData: JSON.stringify(tx)
         };
 
-        // Try to auto-categorize
-        const categoryId = await categorization.categorizeTransaction(transaction);
+        // Try to auto-categorize using rules
+        let categoryId = await categorization.categorizeTransaction(transaction);
+
+        // If no rule matched, try to get category from previous transaction with same counterparty
+        if (!categoryId && transaction.counterpartyName) {
+          categoryId = await database.getCategoryByCounterparty(transaction.counterpartyName);
+        }
+
         transaction.categoryId = categoryId;
 
-        await database.upsertTransaction(transaction);
-        syncedCount++;
+        const result = await database.upsertTransaction(transaction);
+        if (result.isNew) {
+          syncedCount++;
+        }
       } catch (error) {
         console.error('Error syncing transaction:', error.message);
       }

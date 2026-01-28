@@ -477,7 +477,10 @@
             <div class="card">
                 <div class="card-header">
                     <h3>Банкови връзки (Requisitions)</h3>
-                    <button id="addBankBtn" class="btn btn-primary">+ Добави банка</button>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="addBankBtn" class="btn btn-primary">+ Добави банка</button>
+                        <button id="cleanupRequisitionsBtn" class="btn btn-danger" title="Изтрий всички незавършени връзки">🗑️ Изчисти</button>
+                    </div>
                 </div>
                 <div class="card-body">
                     <div id="requisitionsList">
@@ -505,6 +508,7 @@
                     <div style="display: flex; gap: 12px; flex-wrap: wrap;">
                         <button id="syncAccountsBtn" class="btn btn-primary">🔄 Синхронизирай сметки</button>
                         <button id="syncTransactionsBtn" class="btn btn-primary">🔄 Синхронизирай транзакции</button>
+                        <button id="applyCategoriesBtn" class="btn btn-secondary">🏷️ Приложи категоризиране</button>
                     </div>
                     <div id="syncStatus" style="margin-top: 12px;"></div>
                 </div>

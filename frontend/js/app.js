@@ -712,9 +712,14 @@ async function applyRules() {
         hideLoader();
 
         if (result.success) {
-            const message = result.categorizedCount > 0
-                ? `Успешно категоризирани ${result.categorizedCount} транзакции!`
-                : 'Няма некатегоризирани транзакции, които да съвпадат с правилата.';
+            let message;
+            if (result.totalUncategorized === 0) {
+                message = 'Няма некатегоризирани транзакции';
+            } else if (result.categorizedCount === 0) {
+                message = `Намерени ${result.totalUncategorized} некатегоризирани, но няма съвпадения`;
+            } else {
+                message = `Намерени ${result.totalUncategorized} → категоризирани ${result.categorizedCount}`;
+            }
             showNotification(message, 'success');
         }
     } catch (error) {
@@ -1247,6 +1252,47 @@ async function loadSettingsPage() {
     }
 }
 
+// Cleanup requisitions - delete all with status UA (pending) or CR (created)
+async function cleanupRequisitions() {
+    try {
+        const requisitions = await api.getRequisitions();
+
+        // Filter requisitions to delete: UA (Изчаква одобрение), CR (Създадена)
+        const toDelete = requisitions.filter(req => ['UA', 'CR'].includes(req.status));
+
+        if (toDelete.length === 0) {
+            showNotification('Няма връзки за изчистване', 'info');
+            return;
+        }
+
+        if (!confirm(`Сигурни ли сте, че искате да изтриете ${toDelete.length} незавършени банкови връзки?`)) {
+            return;
+        }
+
+        showLoader();
+        let deletedCount = 0;
+
+        for (const req of toDelete) {
+            try {
+                await api.deleteRequisition(req.id);
+                deletedCount++;
+            } catch (error) {
+                console.error(`Error deleting requisition ${req.id}:`, error);
+            }
+        }
+
+        hideLoader();
+        showNotification(`Изтрити ${deletedCount} банкови връзки`, 'success');
+
+        // Reload settings page
+        loadSettings();
+    } catch (error) {
+        hideLoader();
+        console.error('Error cleaning up requisitions:', error);
+        showNotification('Грешка при изчистване: ' + error.message, 'error');
+    }
+}
+
 function renderRequisitionsList(requisitions) {
     const container = document.getElementById('requisitionsList');
 
@@ -1480,7 +1526,21 @@ async function syncTransactions() {
         if (result.success) {
             const message = `Успешно синхронизирани ${result.transactionsSynced} транзакции!`;
             showNotification(message, 'success');
-            document.getElementById('syncStatus').innerHTML = `<p style="color: var(--success-color);">✓ ${message}</p>`;
+
+            // Build detailed status with breakdown by account
+            let statusHtml = `<p style="color: var(--success-color); margin-bottom: 10px;">✓ ${message}</p>`;
+
+            if (result.byAccount && result.byAccount.length > 0) {
+                statusHtml += '<div style="font-size: 13px;">';
+                result.byAccount.forEach(acc => {
+                    const icon = acc.error ? '❌' : (acc.count > 0 ? '✅' : '➖');
+                    const text = acc.error ? 'грешка' : `${acc.count} нови`;
+                    statusHtml += `<p style="margin: 3px 0;">${icon} ${escapeHtml(acc.accountName)}: ${text}</p>`;
+                });
+                statusHtml += '</div>';
+            }
+
+            document.getElementById('syncStatus').innerHTML = statusHtml;
 
             // Update dashboard if visible
             if (document.getElementById('dashboard-page').classList.contains('active')) {
@@ -1492,6 +1552,40 @@ async function syncTransactions() {
         hideLoader();
         console.error('Error syncing transactions:', error);
         const errorMsg = 'Грешка при синхронизация: ' + error.message;
+        showNotification(errorMsg, 'error');
+        document.getElementById('syncStatus').innerHTML = `<p style="color: var(--danger-color);">✗ ${errorMsg}</p>`;
+    }
+}
+
+// Apply categorization rules to uncategorized transactions
+async function applyCategories() {
+    try {
+        showLoader();
+        document.getElementById('syncStatus').innerHTML = '<p class="text-muted">Прилагане на категоризиране...</p>';
+
+        const result = await api.applyCategorizationRules();
+
+        hideLoader();
+
+        if (result.success) {
+            let message;
+            if (result.totalUncategorized === 0) {
+                message = 'Няма некатегоризирани транзакции';
+            } else if (result.categorizedCount === 0) {
+                message = `Намерени ${result.totalUncategorized} некатегоризирани, но няма съвпадения с правилата`;
+            } else {
+                message = `Намерени ${result.totalUncategorized} некатегоризирани → категоризирани ${result.categorizedCount}`;
+            }
+            showNotification(message, 'success');
+            document.getElementById('syncStatus').innerHTML = `<p style="color: var(--success-color);">✓ ${message}</p>`;
+
+            // Refresh current page if it shows transactions
+            refreshCurrentPage();
+        }
+    } catch (error) {
+        hideLoader();
+        console.error('Error applying categories:', error);
+        const errorMsg = 'Грешка при категоризиране: ' + error.message;
         showNotification(errorMsg, 'error');
         document.getElementById('syncStatus').innerHTML = `<p style="color: var(--danger-color);">✗ ${errorMsg}</p>`;
     }
@@ -1602,36 +1696,33 @@ async function syncData() {
         
         // Sync transactions
         const txResult = await api.syncTransactions();
-        
+
         if (txResult.success) {
-            // Get breakdown by bank
-            const accounts = await api.getAccounts();
-            const bankBreakdown = {};
-            
-            // Group accounts by bank
-            accounts.forEach(acc => {
-                const bankName = acc.institution_name || 'Неизвестна банка';
-                if (!bankBreakdown[bankName]) {
-                    bankBreakdown[bankName] = { accounts: 0, accountNames: [] };
-                }
-                bankBreakdown[bankName].accounts++;
-                bankBreakdown[bankName].accountNames.push(acc.custom_name || acc.name);
-            });
-            
             syncResults.push(`<p>✅ <strong>Синхронизирани транзакции:</strong> ${txResult.transactionsSynced}</p>`);
-            syncResults.push(`<hr style="margin: 15px 0; border: none; border-top: 1px solid #e0e0e0;">`);
-            
-            // Add bank breakdown
-            Object.entries(bankBreakdown).forEach(([bank, data]) => {
-                syncResults.push(`
-                    <div style="margin-bottom: 10px; padding: 10px; background: #f5f5f5; border-radius: 6px;">
-                        <p style="margin: 0 0 5px 0;"><strong>🏦 ${escapeHtml(bank)}</strong></p>
-                        <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">
-                            Брой сметки: ${data.accounts}
-                        </p>
-                    </div>
-                `);
-            });
+
+            // Show breakdown by account if available
+            if (txResult.byAccount && txResult.byAccount.length > 0) {
+                syncResults.push(`<hr style="margin: 15px 0; border: none; border-top: 1px solid #e0e0e0;">`);
+                syncResults.push(`<p style="margin-bottom: 10px; font-weight: 500;">Разбивка по сметки:</p>`);
+
+                txResult.byAccount.forEach(acc => {
+                    const statusIcon = acc.error ? '❌' : (acc.count > 0 ? '✅' : '➖');
+                    const countText = acc.error
+                        ? `<span style="color: var(--danger-color);">Грешка: ${escapeHtml(acc.error)}</span>`
+                        : `${acc.count} нови транзакции`;
+
+                    syncResults.push(`
+                        <div style="margin-bottom: 8px; padding: 10px; background: #f5f5f5; border-radius: 6px;">
+                            <p style="margin: 0 0 3px 0;">
+                                ${statusIcon} <strong>${escapeHtml(acc.accountName)}</strong>
+                            </p>
+                            <p style="margin: 0; font-size: 12px; color: var(--text-secondary);">
+                                🏦 ${escapeHtml(acc.institutionName)} · ${countText}
+                            </p>
+                        </div>
+                    `);
+                });
+            }
         }
         
         // Show final results
@@ -1645,12 +1736,7 @@ async function syncData() {
         `;
         
         showNotification('Синхронизацията завърши успешно', 'success');
-        
-        // Refresh dashboard if visible
-        if (document.getElementById('dashboard-page').classList.contains('active')) {
-            dashboard.refresh();
-        }
-        
+
     } catch (error) {
         console.error('Sync error:', error);
         progressDiv.innerHTML = `
@@ -1664,12 +1750,37 @@ async function syncData() {
         showNotification('Грешка при синхронизация: ' + error.message, 'error');
     }
     
-    // Show close button
+    // Show close button and refresh page data on close
+    const closeAndRefresh = () => {
+        modal.classList.remove('active');
+        refreshCurrentPage();
+    };
+
     document.getElementById('modalCancel').textContent = 'Затвори';
     document.getElementById('modalCancel').style.display = 'inline-block';
     document.querySelector('.modal-close').style.display = 'block';
-    document.getElementById('modalCancel').onclick = () => modal.classList.remove('active');
-    document.querySelector('.modal-close').onclick = () => modal.classList.remove('active');
+    document.getElementById('modalCancel').onclick = closeAndRefresh;
+    document.querySelector('.modal-close').onclick = closeAndRefresh;
+}
+
+// Refresh data on current page
+async function refreshCurrentPage() {
+    const activePage = document.querySelector('.page.active');
+    if (!activePage) return;
+
+    const pageId = activePage.id;
+
+    if (pageId === 'dashboard-page' && typeof dashboard !== 'undefined') {
+        dashboard.refresh();
+    } else if (pageId === 'transactions-page' && typeof transactionsPage !== 'undefined') {
+        transactionsPage.loadTransactions();
+    } else if (pageId === 'categories-page') {
+        loadCategories();
+    } else if (pageId === 'reports-page') {
+        // Reports are generated on demand, no auto-refresh needed
+    } else if (pageId === 'settings-page') {
+        loadSettings();
+    }
 }
 
 // Logs functionality
@@ -1730,8 +1841,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Settings page buttons
     document.getElementById('addBankBtn')?.addEventListener('click', showAddBankModal);
+    document.getElementById('cleanupRequisitionsBtn')?.addEventListener('click', cleanupRequisitions);
     document.getElementById('syncAccountsBtn')?.addEventListener('click', syncAccounts);
     document.getElementById('syncTransactionsBtn')?.addEventListener('click', syncTransactions);
+    document.getElementById('applyCategoriesBtn')?.addEventListener('click', applyCategories);
     document.getElementById('backupBtn')?.addEventListener('click', createBackup);
     document.getElementById('toggleLogsBtn')?.addEventListener('click', toggleLogsPanel);
     document.getElementById('refreshLogsBtn')?.addEventListener('click', loadLogs);

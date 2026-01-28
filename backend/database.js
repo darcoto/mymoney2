@@ -15,6 +15,12 @@ if (!fs.existsSync(dataDir)) {
 // Initialize database connection
 function getDb() {
   if (!db) {
+    // Log visual separator for new connection
+    logger.info('');
+    logger.info('');
+    logger.info('==============================================');
+    logger.info(`Database connection: ${config.databasePath}`);
+
     db = new sqlite3.Database(config.databasePath, (err) => {
       if (err) {
         console.error('Error opening database:', err);
@@ -371,13 +377,35 @@ async function upsertTransaction(transaction) {
   const existing = await getQuery('SELECT * FROM transactions WHERE id = ?', [transaction.id]);
 
   if (existing) {
-    // Update raw_data if provided
-    if (transaction.rawData) {
-      await runQuery('UPDATE transactions SET raw_data = ? WHERE id = ?', [transaction.rawData, transaction.id]);
-    }
-    return { lastID: transaction.id, changes: 0 };
+    // Update all GoCardless-provided fields, but preserve locally-set fields (category_id, notes)
+    await runQuery(
+      `UPDATE transactions SET
+        transaction_date = ?,
+        booking_date = ?,
+        amount = ?,
+        currency = ?,
+        description = ?,
+        counterparty_name = ?,
+        raw_data = ?,
+        original_amount = ?,
+        original_currency = ?
+       WHERE id = ?`,
+      [
+        transaction.transactionDate,
+        transaction.bookingDate,
+        transaction.amount,
+        transaction.currency,
+        transaction.description,
+        transaction.counterpartyName,
+        transaction.rawData || null,
+        transaction.originalAmount || null,
+        transaction.originalCurrency || null,
+        transaction.id
+      ]
+    );
+    return { isNew: false };
   } else {
-    return await runQuery(
+    await runQuery(
       `INSERT INTO transactions (id, account_id, transaction_date, booking_date, amount,
        currency, description, counterparty_name, category_id, raw_data, original_amount, original_currency)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -386,6 +414,7 @@ async function upsertTransaction(transaction) {
        transaction.description, transaction.counterpartyName, transaction.categoryId,
        transaction.rawData || null, transaction.originalAmount || null, transaction.originalCurrency || null]
     );
+    return { isNew: true };
   }
 }
 
@@ -782,6 +811,20 @@ async function deleteCounterpartyAlias(id) {
   return await runQuery('DELETE FROM counterparty_aliases WHERE id = ?', [id]);
 }
 
+// Get category from previous transaction with same counterparty
+async function getCategoryByCounterparty(counterpartyName) {
+  if (!counterpartyName) return null;
+
+  const result = await getQuery(
+    `SELECT category_id FROM transactions
+     WHERE counterparty_name = ? AND category_id IS NOT NULL
+     ORDER BY transaction_date DESC LIMIT 1`,
+    [counterpartyName]
+  );
+
+  return result ? result.category_id : null;
+}
+
 module.exports = {
   initialize,
   getAllAccounts,
@@ -814,5 +857,6 @@ module.exports = {
   getCounterpartyAlias,
   createCounterpartyAlias,
   updateCounterpartyAlias,
-  deleteCounterpartyAlias
+  deleteCounterpartyAlias,
+  getCategoryByCounterparty
 };

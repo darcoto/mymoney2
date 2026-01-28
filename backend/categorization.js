@@ -1,4 +1,5 @@
 const database = require('./database');
+const logger = require('./logger');
 
 /**
  * Automatically categorize a transaction based on rules
@@ -45,24 +46,33 @@ async function categorizeTransaction(transaction) {
 
 /**
  * Apply categorization rules to all uncategorized transactions
- * @returns {Number} - Count of categorized transactions
+ * @returns {Object} - { totalUncategorized, categorizedCount }
  */
 async function applyRulesToUncategorized() {
   try {
-    // Get all uncategorized transactions
-    const transactions = await database.getTransactions({ categoryId: null });
+    // Get all uncategorized transactions (no pagination limit)
+    const result = await database.getTransactions({ categoryId: 'uncategorized', limit: 10000 });
+    const transactions = result.transactions || result;
 
+    const totalUncategorized = transactions.length;
     let categorizedCount = 0;
 
     for (const transaction of transactions) {
-      const categoryId = await categorizeTransaction(transaction);
+      // First try categorization rules
+      let categoryId = await categorizeTransaction(transaction);
+
+      // If no rule matched, try to get category from previous transaction with same counterparty
+      if (!categoryId && transaction.counterparty_name) {
+        categoryId = await database.getCategoryByCounterparty(transaction.counterparty_name);
+      }
+
       if (categoryId) {
         await database.updateTransactionCategory(transaction.id, categoryId);
         categorizedCount++;
       }
     }
 
-    return categorizedCount;
+    return { totalUncategorized, categorizedCount };
   } catch (error) {
     console.error('Error applying rules to uncategorized transactions:', error.message);
     throw error;

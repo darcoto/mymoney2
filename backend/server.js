@@ -109,17 +109,34 @@ app.post('/api/sync/transactions', async (req, res) => {
   try {
     const accounts = await database.getAllAccounts();
     let totalSynced = 0;
+    const byAccount = [];
 
     for (const account of accounts) {
+      // Skip CASH account - it's for manual transactions only
+      if (account.id === 'CASH') continue;
+
       try {
         const count = await goCardlessApi.syncAccountTransactions(account.id);
         totalSynced += count;
+        byAccount.push({
+          accountId: account.id,
+          accountName: account.custom_name || account.name,
+          institutionName: account.institution_name,
+          count: count
+        });
       } catch (error) {
         console.error(`Error syncing account ${account.id}:`, error.message);
+        byAccount.push({
+          accountId: account.id,
+          accountName: account.custom_name || account.name,
+          institutionName: account.institution_name,
+          count: 0,
+          error: error.message
+        });
       }
     }
 
-    res.json({ success: true, transactionsSynced: totalSynced });
+    res.json({ success: true, transactionsSynced: totalSynced, byAccount });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -320,8 +337,8 @@ app.delete('/api/categorization-rules/:id', async (req, res) => {
 
 app.post('/api/categorization-rules/apply', async (req, res) => {
   try {
-    const categorizedCount = await categorization.applyRulesToUncategorized();
-    res.json({ success: true, categorizedCount });
+    const result = await categorization.applyRulesToUncategorized();
+    res.json({ success: true, ...result });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
