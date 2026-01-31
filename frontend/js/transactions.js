@@ -52,6 +52,15 @@ class TransactionsPage {
         document.getElementById('applyFilters').addEventListener('click', () => this.applyFilters());
         document.getElementById('clearFilters').addEventListener('click', () => this.clearFilters());
 
+        // Quick date filter buttons
+        document.getElementById('filterThisMonth')?.addEventListener('click', () => this.setDateFilter('thisMonth'));
+        document.getElementById('filterLastMonth')?.addEventListener('click', () => this.setDateFilter('lastMonth'));
+        document.getElementById('filterLastYear')?.addEventListener('click', () => this.setDateFilter('lastYear'));
+
+        // Quick filter uncategorized button
+        const quickFilterBtn = document.getElementById('quickFilterUncategorized');
+        quickFilterBtn?.addEventListener('click', () => this.filterUncategorized());
+
         // Filter section toggle
         const filtersToggle = document.getElementById('filtersToggle');
         const filtersBody = document.getElementById('filtersBody');
@@ -62,8 +71,50 @@ class TransactionsPage {
                 const isVisible = filtersBody.style.display !== 'none';
                 filtersBody.style.display = isVisible ? 'none' : 'block';
                 filtersToggleIcon.textContent = isVisible ? '▼' : '▲';
+                // Toggle quick filter button visibility
+                if (quickFilterBtn) {
+                    quickFilterBtn.style.display = isVisible ? 'inline-flex' : 'none';
+                }
             });
         }
+    }
+
+    filterUncategorized() {
+        // Clear other filters and set category to uncategorized
+        document.getElementById('filterStartDate').value = '';
+        document.getElementById('filterEndDate').value = '';
+        document.getElementById('filterAccount').value = '';
+        document.getElementById('filterCategory').value = 'uncategorized';
+        document.getElementById('filterType').value = '';
+        document.getElementById('filterSearch').value = '';
+
+        this.applyFilters();
+    }
+
+    setDateFilter(period) {
+        const now = new Date();
+        let startDate, endDate;
+
+        switch (period) {
+            case 'thisMonth':
+                startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                break;
+            case 'lastMonth':
+                startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                endDate = new Date(now.getFullYear(), now.getMonth(), 0);
+                break;
+            case 'lastYear':
+                startDate = new Date(now.getFullYear() - 1, 0, 1);
+                endDate = new Date(now.getFullYear() - 1, 11, 31);
+                break;
+        }
+
+        // Format dates as YYYY-MM-DD
+        const formatDate = (date) => date.toISOString().split('T')[0];
+
+        document.getElementById('filterStartDate').value = formatDate(startDate);
+        document.getElementById('filterEndDate').value = formatDate(endDate);
     }
 
     async applyFilters() {
@@ -176,7 +227,6 @@ class TransactionsPage {
                 <td class="description-cell" data-id="${tx.id}" data-index="${index}" style="cursor: pointer;" title="Кликни за детайли">
                     <div style="font-weight: 500; display: flex; align-items: center; gap: 6px;">
                         <span class="counterparty-name">${displayName ? escapeHtml(displayName) : '<span class="text-muted">—</span>'}</span>
-                        ${tx.counterparty_name ? `<a href="https://www.google.com/search?q=${encodeURIComponent(tx.counterparty_name || displayName)}" target="_blank" rel="noopener" class="google-search-icon" style="opacity: 0; font-size: 12px; text-decoration: none; transition: opacity 0.2s;" title="${hasAlias ? 'Оригинал: ' + escapeHtml(tx.counterparty_name) + ' - Търси в Google' : 'Търси в Google'}" onclick="event.stopPropagation();">🔍</a>` : ''}
                         ${tx.counterparty_name ? `<span class="alias-btn" data-counterparty="${escapeHtml(tx.counterparty_name)}" data-display="${escapeHtml(tx.counterparty_display_name || '')}" onclick="event.stopPropagation(); transactionsPage.editCounterpartyAlias('${escapeHtml(tx.counterparty_name).replace(/'/g, "\\'")}', '${escapeHtml(tx.counterparty_display_name || '').replace(/'/g, "\\'")}')" style="cursor: pointer; font-size: 12px; opacity: 0; transition: opacity 0.2s;" title="Задай синоним">✏️</span>` : ''}
                     </div>
                     <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
@@ -193,17 +243,20 @@ class TransactionsPage {
                     ${formatCurrency(tx.amount)}
                 </td>
                 <td style="text-align: center; white-space: nowrap;">
-                    <span class="editable notes-cell" data-id="${tx.id}" title="${tx.notes ? escapeHtml(tx.notes) : 'Добави бележка'}" style="cursor: pointer; font-size: 18px;">
-                        ${tx.notes ? '📝' : '➕'}
+                    <span class="details-cell" data-id="${tx.id}" data-index="${index}" title="Детайли${tx.notes ? '\n📝 ' + escapeHtml(tx.notes) : ''}" style="cursor: pointer; font-size: 18px;">
+                        ${tx.notes ? '📋📝' : '📋'}
                     </span>
                 </td>
             `;
             tbody.appendChild(row);
         });
 
-        // Add click handlers for editable cells
-        document.querySelectorAll('.notes-cell').forEach(cell => {
-            cell.addEventListener('click', () => this.editNotes(cell.dataset.id));
+        // Add click handlers for details cells
+        document.querySelectorAll('.details-cell').forEach(cell => {
+            cell.addEventListener('click', () => {
+                const index = parseInt(cell.dataset.index);
+                this.showRawData(cell.dataset.id, index);
+            });
         });
 
         document.querySelectorAll('.description-cell').forEach(cell => {
@@ -219,12 +272,12 @@ class TransactionsPage {
         // Add hover effect for transaction rows to show/hide icons
         document.querySelectorAll('.transaction-row').forEach(row => {
             row.addEventListener('mouseenter', () => {
-                row.querySelectorAll('.google-search-icon, .alias-btn').forEach(el => {
+                row.querySelectorAll('.alias-btn').forEach(el => {
                     el.style.opacity = '0.7';
                 });
             });
             row.addEventListener('mouseleave', () => {
-                row.querySelectorAll('.google-search-icon, .alias-btn').forEach(el => {
+                row.querySelectorAll('.alias-btn').forEach(el => {
                     el.style.opacity = '0';
                 });
             });
@@ -324,23 +377,22 @@ class TransactionsPage {
 
         const modal = document.getElementById('modal');
         const modalContent = modal.querySelector('.modal-content');
-        modalContent.style.maxWidth = '900px';
+        modalContent.style.maxWidth = '1100px';
 
-        // Navigation buttons for modal header
+        // Navigation buttons for modal footer
         const hasPrev = this.currentTransactionIndex > 0;
         const hasNext = this.currentTransactionIndex < this.transactions.length - 1;
-        const navBtnStyle = 'padding: 4px 10px; background: var(--primary-color); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;';
-        const navBtnDisabledStyle = 'padding: 4px 10px; background: #ccc; color: #999; border: none; border-radius: 4px; cursor: not-allowed; font-size: 14px;';
 
-        document.getElementById('modalTitle').innerHTML = `
-            <div style="display: flex; align-items: center; gap: 12px;">
-                <button id="modalPrevTx" style="${hasPrev ? navBtnStyle : navBtnDisabledStyle}" ${hasPrev ? '' : 'disabled'}>← Предишна</button>
-                <span>Детайли на транзакция (${this.currentTransactionIndex + 1}/${this.transactions.length})</span>
-                <button id="modalNextTx" style="${hasNext ? navBtnStyle : navBtnDisabledStyle}" ${hasNext ? '' : 'disabled'}>Следваща →</button>
-            </div>
+        document.getElementById('modalTitle').textContent = `Детайли на транзакция (${this.currentTransactionIndex + 1}/${this.transactions.length})`;
+
+        // Update footer with navigation buttons
+        const modalFooter = modal.querySelector('.modal-footer');
+        modalFooter.style.justifyContent = 'space-between';
+        modalFooter.innerHTML = `
+            <button id="modalPrevTx" class="btn btn-secondary" ${hasPrev ? '' : 'disabled'} style="${hasPrev ? '' : 'opacity: 0.5; cursor: not-allowed;'}">← Предишна</button>
+            <button id="modalCancel" class="btn btn-secondary">Затвори</button>
+            <button id="modalNextTx" class="btn btn-secondary" ${hasNext ? '' : 'disabled'} style="${hasNext ? '' : 'opacity: 0.5; cursor: not-allowed;'}">Следваща →</button>
         `;
-        document.getElementById('modalSave').style.display = 'none';
-        document.getElementById('modalCancel').textContent = 'Затвори';
 
         let rawDataContent = 'Няма налични raw данни.';
         if (transaction.raw_data) {
@@ -356,6 +408,12 @@ class TransactionsPage {
         let amountDisplay = formatCurrency(transaction.amount);
         if (transaction.original_amount && transaction.original_currency) {
             amountDisplay += ` <span style="color: var(--text-muted); font-size: 12px;">(оригинал: ${transaction.original_amount} ${transaction.original_currency})</span>`;
+        }
+
+        // Prepare Google search query (remove "BGR " prefix if present)
+        let googleSearchQuery = transaction.counterparty_name || '';
+        if (googleSearchQuery.startsWith('BGR ')) {
+            googleSearchQuery = googleSearchQuery.substring(4);
         }
 
         // Build category selection HTML
@@ -391,21 +449,20 @@ class TransactionsPage {
                     <h4 style="margin: 0 0 12px 0; color: var(--primary-color);">Основна информация</h4>
                     <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; width: 110px; border: 1px solid #e0e0e0;"><strong>ID:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-family: monospace; font-size: 10px;">${escapeHtml(transaction.id)}</td></tr>
+                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Контрагент:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;"><span style="color: var(--primary-color); font-weight: 600; font-size: 14px;">${escapeHtml(transaction.counterparty_name || '-')}</span> ${transaction.counterparty_name ? `<a href="https://www.google.com/search?q=${encodeURIComponent(googleSearchQuery)}" target="_blank" rel="noopener" style="text-decoration: none; margin-left: 6px;" title="Търси в Google">🔍</a>` : ''}</td></tr>
+                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Сума:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-weight: 600; ${transaction.amount >= 0 ? 'color: var(--success-color);' : 'color: var(--danger-color);'}">${amountDisplay}</td></tr>
+                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Описание:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(transaction.description || '-')}</td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Банка:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(bankName)}</td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Сметка:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(accountName)}</td></tr>
+                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Сметка:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(accountName)} <span style="color: #888; font-size: 11px;">(${escapeHtml(account?.iban || '')})</span></td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Дата:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.transaction_date}</td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Дата осчетов.:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.booking_date || '-'}</td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Създадена:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.created_at || '-'}</td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Сума:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-weight: 600; ${transaction.amount >= 0 ? 'color: var(--success-color);' : 'color: var(--danger-color);'}">${amountDisplay}</td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Контрагент:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(transaction.counterparty_name || '-')}</td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Описание:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(transaction.description || '-')}</td></tr>
-                        ${transaction.notes ? `<tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Бележки:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(transaction.notes)}</td></tr>` : ''}
                     </table>
 
                     <h4 style="margin: 16px 0 12px 0; color: var(--primary-color);">Raw данни от GoCardless API</h4>
                     <pre style="background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; max-height: 200px; overflow: auto; font-size: 11px; white-space: pre-wrap; line-height: 1.3;">${escapeHtml(rawDataContent)}</pre>
                 </div>
-                <div style="width: 320px; flex-shrink: 0;">
+                <div style="width: 520px; flex-shrink: 0;">
                     <h4 style="margin: 0 0 12px 0; color: var(--primary-color);">Категория</h4>
                     <div style="background: #f9f9f9; padding: 12px; border-radius: 8px; border: 1px solid #e0e0e0;">
                         <div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #e0e0e0;">
@@ -424,6 +481,9 @@ class TransactionsPage {
                             </label>
                         </div>
                     </div>
+
+                    <h4 style="margin: 16px 0 12px 0; color: var(--primary-color);">📝 Бележки</h4>
+                    <textarea id="modalNotesText" class="input" rows="3" style="resize: vertical; font-size: 13px;" placeholder="Добави бележка...">${escapeHtml(transaction.notes || '')}</textarea>
                 </div>
             </div>
         `;
@@ -477,14 +537,35 @@ class TransactionsPage {
             }
         });
 
-        document.getElementById('modalCancel').onclick = () => {
+        // Auto-save notes on blur
+        document.getElementById('modalNotesText')?.addEventListener('blur', async (e) => {
+            const notes = e.target.value;
+            // Only save if notes changed
+            if (notes === (transaction.notes || '')) return;
+
+            try {
+                await api.updateTransactionNotes(transaction.id, notes);
+                transaction.notes = notes;
+                await this.loadTransactions();
+                showNotification('Бележките са запазени', 'success');
+            } catch (error) {
+                showNotification('Грешка при запазване: ' + error.message, 'error');
+            }
+        });
+
+        const closeModal = () => {
             modalContent.style.maxWidth = '';
+            // Restore original footer
+            modalFooter.style.justifyContent = 'flex-end';
+            modalFooter.innerHTML = `
+                <button id="modalCancel" class="btn btn-secondary">Отказ</button>
+                <button id="modalSave" class="btn btn-primary">Запази</button>
+            `;
             modal.classList.remove('active');
         };
-        document.querySelector('.modal-close').onclick = () => {
-            modalContent.style.maxWidth = '';
-            modal.classList.remove('active');
-        };
+
+        document.getElementById('modalCancel').onclick = closeModal;
+        document.querySelector('.modal-close').onclick = closeModal;
     }
 
     async editNotes(transactionId) {

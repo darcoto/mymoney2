@@ -7,13 +7,14 @@ const database = require('./database');
 const logger = require('./logger');
 
 const categorization = require('./categorization');
+const xmlImport = require('./xml-import');
 
 const app = express();
 
 // Middleware
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Serve static files from frontend
 app.use(express.static(path.join(__dirname, '../frontend')));
@@ -247,6 +248,89 @@ app.put('/api/transactions/:id/notes', async (req, res) => {
   }
 });
 
+// Import transactions from XML file (DSK Bank format)
+app.post('/api/transactions/import-xml', async (req, res) => {
+  try {
+    const { xmlContent, accountId, currency } = req.body;
+
+    // Validate input
+    if (!xmlContent) {
+      return res.status(400).json({ error: 'XML съдържанието е задължително' });
+    }
+    if (!accountId) {
+      return res.status(400).json({ error: 'Сметката е задължителна' });
+    }
+
+    // Verify account exists
+    const account = await database.getAccountById(accountId);
+    if (!account) {
+      return res.status(404).json({ error: 'Сметката не е намерена' });
+    }
+
+    // Parse XML and prepare transactions
+    const transactions = xmlImport.processXmlForImport(xmlContent, accountId, currency || 'BGN');
+
+    if (transactions.length === 0) {
+      return res.json({
+        success: true,
+        imported: 0,
+        skipped: 0,
+        categorized: 0,
+        errors: [],
+        total: 0,
+        message: 'Няма намерени транзакции в XML файла'
+      });
+    }
+
+    // Apply categorization rules and counterparty history before import
+    let categorizedCount = 0;
+    for (const tx of transactions) {
+      // First try categorization rules
+      let categoryId = await categorization.categorizeTransaction({
+        description: tx.description,
+        counterpartyName: tx.counterpartyName
+      });
+
+      // If no rule matched, try to find category from previous transactions with same counterparty
+      if (!categoryId && tx.counterpartyName) {
+        categoryId = await database.getCategoryByCounterparty(tx.counterpartyName);
+      }
+
+      if (categoryId) {
+        tx.categoryId = categoryId;
+        categorizedCount++;
+      }
+    }
+
+    // Import transactions in batch
+    const results = await database.importTransactionsBatch(transactions);
+
+    logger.info(`[XML Import] Imported ${results.imported}, skipped ${results.skipped}, categorized ${categorizedCount}, errors: ${results.errors.length}`);
+
+    res.json({
+      success: true,
+      imported: results.imported,
+      skipped: results.skipped,
+      categorized: categorizedCount,
+      errors: results.errors,
+      total: transactions.length
+    });
+  } catch (error) {
+    logger.error(`[XML Import] Error: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get accounts by institution name pattern
+app.get('/api/accounts/by-institution/:pattern', async (req, res) => {
+  try {
+    const accounts = await database.getAccountsByInstitution(req.params.pattern);
+    res.json(accounts);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/transactions/stats', async (req, res) => {
   try {
     const { start_date, end_date } = req.query;
@@ -467,7 +551,30 @@ app.get('*', (req, res) => {
 // Error handler
 app.use((err, req, res, next) => {
   console.error('Server error:', err);
-  res.status(500).json({ error: 'Internal server error' });
+
+  // Handle specific error types with user-friendly messages
+  if (err.type === 'entity.too.large') {
+    const limitMB = Math.round(err.limit / 1024 / 1024);
+    const sizeMB = (err.length / 1024 / 1024).toFixed(2);
+    return res.status(413).json({
+      error: `Файлът е твърде голям (${sizeMB} MB). Максималният разрешен размер е ${limitMB} MB.`
+    });
+  }
+
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({
+      error: 'Невалиден формат на данните. Моля, проверете файла.'
+    });
+  }
+
+  if (err.code === 'ENOENT') {
+    return res.status(404).json({
+      error: 'Файлът не е намерен.'
+    });
+  }
+
+  // Default error
+  res.status(500).json({ error: 'Възникна грешка на сървъра. Моля, опитайте отново.' });
 });
 
 // Start server

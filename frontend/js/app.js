@@ -1159,6 +1159,167 @@ async function showAddManualTransactionModal() {
     }
 }
 
+async function showImportXmlModal() {
+    try {
+        showLoader();
+
+        // Load all accounts to populate the select
+        const accounts = await api.getAccounts();
+        hideLoader();
+
+        const modal = document.getElementById('modal');
+        document.getElementById('modalTitle').textContent = 'Импорт на транзакции от XML';
+        document.getElementById('modalSave').style.display = 'inline-block';
+        document.getElementById('modalSave').textContent = 'Импорт';
+        document.getElementById('modalCancel').textContent = 'Отказ';
+
+        // Build account options
+        const accountOptions = accounts
+            .map(acc => {
+                const displayName = acc.custom_name || acc.name || acc.institution_name || acc.iban;
+                return `<option value="${acc.id}">${escapeHtml(displayName)}</option>`;
+            })
+            .join('');
+
+        document.getElementById('modalBody').innerHTML = `
+            <div class="filter-group">
+                <label>XML файл от Банка ДСК *</label>
+                <input type="file" id="importXmlFile" class="input" accept=".xml" required>
+                <small class="text-muted">Изберете XML файл, експортиран от Банка ДСК</small>
+            </div>
+            <div class="filter-group">
+                <label>Сметка *</label>
+                <select id="importXmlAccount" class="input" required>
+                    <option value="">Изберете сметка</option>
+                    ${accountOptions}
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Валута на файла</label>
+                <select id="importXmlCurrency" class="input">
+                    <option value="BGN">BGN (ще се конвертира в EUR)</option>
+                    <option value="EUR">EUR</option>
+                </select>
+            </div>
+            <div id="importProgress" style="display: none; margin-top: 15px;">
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: 0%;"></div>
+                </div>
+                <p id="importStatus" class="text-muted" style="margin-top: 5px;">Обработка...</p>
+            </div>
+            <div id="importResult" style="display: none; margin-top: 15px;"></div>
+        `;
+
+        modal.classList.add('active');
+
+        const saveHandler = async () => {
+            const fileInput = document.getElementById('importXmlFile');
+            const accountId = document.getElementById('importXmlAccount').value;
+            const currency = document.getElementById('importXmlCurrency').value;
+
+            if (!fileInput.files || fileInput.files.length === 0) {
+                showNotification('Моля, изберете XML файл', 'error');
+                return;
+            }
+            if (!accountId) {
+                showNotification('Моля, изберете сметка', 'error');
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const progressDiv = document.getElementById('importProgress');
+            const progressFill = progressDiv.querySelector('.progress-fill');
+            const statusText = document.getElementById('importStatus');
+            const resultDiv = document.getElementById('importResult');
+            const importBtn = document.getElementById('modalSave');
+
+            // Disable import button during operation
+            importBtn.disabled = true;
+            importBtn.style.opacity = '0.6';
+            importBtn.style.cursor = 'not-allowed';
+
+            progressDiv.style.display = 'block';
+            resultDiv.style.display = 'none';
+            progressFill.style.width = '30%';
+            statusText.textContent = 'Четене на файла...';
+
+            try {
+                // Read file content
+                const xmlContent = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.onerror = () => reject(new Error('Грешка при четене на файла'));
+                    reader.readAsText(file, 'UTF-8');
+                });
+
+                progressFill.style.width = '60%';
+                statusText.textContent = 'Изпращане към сървъра...';
+
+                // Send to server
+                const result = await api.importXmlTransactions(xmlContent, accountId, currency);
+
+                progressFill.style.width = '100%';
+                statusText.textContent = 'Готово!';
+
+                // Show results
+                let resultHtml = `<div class="alert ${result.imported > 0 ? 'alert-success' : 'alert-info'}">`;
+                resultHtml += `<strong>Резултат:</strong><br>`;
+                resultHtml += `✅ Импортирани: ${result.imported}<br>`;
+                resultHtml += `🏷️ Категоризирани: ${result.categorized || 0}<br>`;
+                resultHtml += `⏭️ Пропуснати (вече съществуват): ${result.skipped}<br>`;
+                resultHtml += `📊 Общо обработени: ${result.total}`;
+
+                if (result.errors && result.errors.length > 0) {
+                    resultHtml += `<br><br>⚠️ Грешки: ${result.errors.length}`;
+                }
+                resultHtml += '</div>';
+
+                resultDiv.innerHTML = resultHtml;
+                resultDiv.style.display = 'block';
+                progressDiv.style.display = 'none';
+
+                if (result.imported > 0) {
+                    showNotification(`Успешно импортирани ${result.imported} транзакции`, 'success');
+
+                    // Refresh transactions list if on transactions page
+                    if (typeof transactionsPage !== 'undefined') {
+                        await transactionsPage.loadTransactions();
+                    }
+                }
+
+                // Change button to close
+                document.getElementById('modalSave').style.display = 'none';
+                document.getElementById('modalCancel').textContent = 'Затвори';
+
+            } catch (error) {
+                progressDiv.style.display = 'none';
+                resultDiv.innerHTML = `<div class="alert alert-error">❌ Грешка: ${escapeHtml(error.message)}</div>`;
+                resultDiv.style.display = 'block';
+                showNotification('Грешка при импорт: ' + error.message, 'error');
+
+                // Re-enable import button on error
+                importBtn.disabled = false;
+                importBtn.style.opacity = '1';
+                importBtn.style.cursor = 'pointer';
+            }
+        };
+
+        document.getElementById('modalSave').onclick = saveHandler;
+        document.getElementById('modalCancel').onclick = () => {
+            document.getElementById('modalSave').textContent = 'Запази';
+            modal.classList.remove('active');
+        };
+        document.querySelector('.modal-close').onclick = () => {
+            document.getElementById('modalSave').textContent = 'Запази';
+            modal.classList.remove('active');
+        };
+
+    } catch (error) {
+        hideLoader();
+        showNotification('Грешка при зареждане: ' + error.message, 'error');
+    }
+}
+
 window.showCategoryTransactions = showCategoryTransactions;
 
 
@@ -1833,6 +1994,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Transactions page buttons
     document.getElementById('addManualTransactionBtn')?.addEventListener('click', showAddManualTransactionModal);
+    document.getElementById('importXmlBtn')?.addEventListener('click', showImportXmlModal);
 
     // Categories page buttons
     document.getElementById('addCategoryBtn')?.addEventListener('click', showAddCategoryModal);

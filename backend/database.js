@@ -825,6 +825,65 @@ async function getCategoryByCounterparty(counterpartyName) {
   return result ? result.category_id : null;
 }
 
+// Transaction management functions for batch operations
+async function beginTransaction() {
+  return runQuery('BEGIN TRANSACTION');
+}
+
+async function commitTransaction() {
+  return runQuery('COMMIT');
+}
+
+async function rollbackTransaction() {
+  return runQuery('ROLLBACK');
+}
+
+/**
+ * Import multiple transactions in a batch with transaction support
+ * @param {Array} transactions - Array of transaction objects
+ * @returns {Object} Results with imported, skipped, and errors counts
+ */
+async function importTransactionsBatch(transactions) {
+  await beginTransaction();
+  try {
+    const results = { imported: 0, skipped: 0, errors: [] };
+
+    for (const tx of transactions) {
+      try {
+        const result = await upsertTransaction(tx);
+        if (result.isNew) {
+          results.imported++;
+        } else {
+          results.skipped++;
+        }
+      } catch (error) {
+        results.errors.push({
+          transaction: tx.id,
+          error: error.message
+        });
+      }
+    }
+
+    await commitTransaction();
+    return results;
+  } catch (error) {
+    await rollbackTransaction();
+    throw error;
+  }
+}
+
+/**
+ * Get accounts by institution name pattern
+ * @param {string} pattern - Pattern to search for in institution_name
+ * @returns {Array} Matching accounts
+ */
+async function getAccountsByInstitution(pattern) {
+  return allQuery(
+    'SELECT * FROM accounts WHERE institution_name LIKE ?',
+    [`%${pattern}%`]
+  );
+}
+
 module.exports = {
   initialize,
   getAllAccounts,
@@ -858,5 +917,7 @@ module.exports = {
   createCounterpartyAlias,
   updateCounterpartyAlias,
   deleteCounterpartyAlias,
-  getCategoryByCounterparty
+  getCategoryByCounterparty,
+  importTransactionsBatch,
+  getAccountsByInstitution
 };

@@ -248,6 +248,18 @@ class APIClient {
             method: 'DELETE'
         });
     }
+
+    // XML Import
+    async importXmlTransactions(xmlContent, accountId, currency) {
+        return this.request('/transactions/import-xml', {
+            method: 'POST',
+            body: JSON.stringify({ xmlContent, accountId, currency })
+        });
+    }
+
+    async getAccountsByInstitution(pattern) {
+        return this.request(`/accounts/by-institution/${encodeURIComponent(pattern)}`);
+    }
 }
 
 // Create global instance
