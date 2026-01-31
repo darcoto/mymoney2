@@ -10,14 +10,16 @@ class TransactionsPage {
         this.transactions = [];
         this.categories = [];
         this.accounts = [];
+        this.countries = [];
         this.currentTransactionIndex = -1; // For prev/next navigation in modal
     }
 
     async init() {
-        // Load categories and accounts for filters
+        // Load categories, accounts, and countries for filters
         try {
             this.categories = await api.getCategories();
             this.accounts = await api.getAccounts();
+            this.countries = await api.getCountries();
 
             this.populateFilterDropdowns();
             this.attachEventListeners();
@@ -46,6 +48,18 @@ class TransactionsPage {
             option.textContent = category.name;
             categorySelect.appendChild(option);
         });
+
+        // Populate country filter
+        const countrySelect = document.getElementById('filterCountry');
+        if (countrySelect && this.countries) {
+            countrySelect.innerHTML = '<option value="">Всички</option><option value="none">Без държава</option>';
+            this.countries.forEach(country => {
+                const option = document.createElement('option');
+                option.value = country.code;
+                option.textContent = `${country.flag || ''} ${country.name || country.code}`.trim();
+                countrySelect.appendChild(option);
+            });
+        }
     }
 
     attachEventListeners() {
@@ -86,6 +100,7 @@ class TransactionsPage {
         document.getElementById('filterAccount').value = '';
         document.getElementById('filterCategory').value = 'uncategorized';
         document.getElementById('filterType').value = '';
+        document.getElementById('filterCountry').value = '';
         document.getElementById('filterSearch').value = '';
 
         this.applyFilters();
@@ -124,6 +139,7 @@ class TransactionsPage {
             account_id: document.getElementById('filterAccount').value,
             category_id: document.getElementById('filterCategory').value,
             type: document.getElementById('filterType').value,
+            country: document.getElementById('filterCountry').value,
             search: document.getElementById('filterSearch').value
         };
 
@@ -137,6 +153,7 @@ class TransactionsPage {
         document.getElementById('filterAccount').value = '';
         document.getElementById('filterCategory').value = '';
         document.getElementById('filterType').value = '';
+        document.getElementById('filterCountry').value = '';
         document.getElementById('filterSearch').value = '';
 
         this.filters = {};
@@ -456,6 +473,7 @@ class TransactionsPage {
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Сметка:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(accountName)} <span style="color: #888; font-size: 11px;">(${escapeHtml(account?.iban || '')})</span></td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Дата:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.transaction_date}</td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Дата осчетов.:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.booking_date || '-'}</td></tr>
+                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Държава:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.country ? (() => { const countryInfo = this.countries.find(c => c.code === transaction.country); return (countryInfo?.flag || '') + ' ' + (countryInfo?.name || transaction.country); })() : '-'}</td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Създадена:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.created_at || '-'}</td></tr>
                     </table>
 

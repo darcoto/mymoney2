@@ -36,17 +36,19 @@ sqlite3 data/demo.db      # Demo database
 
 | File | Purpose |
 |------|---------|
-| `server.js` | Express app with 27 REST API endpoints |
+| `server.js` | Express app with REST API endpoints |
 | `database.js` | SQLite operations, schema, promise wrappers (`runQuery`, `getQuery`, `allQuery`) |
 | `gocardless-api.js` | GoCardless API client with automatic token refresh |
 | `categorization.js` | Transaction auto-categorization engine |
 | `config.js` | Configuration loader |
+| `logger.js` | File-based logging with rotation (`data/logs/app.log`) |
+| `seed-demo.js` | Demo database seeder (run via `npm run seed-demo`) |
 
 ### Frontend (`frontend/`)
 
 - **SPA architecture:** Single `index.html` with page routing via `data-page` attributes
-- **Module-based:** Separate JS files for dashboard, transactions, charts
-- **API client:** Centralized fetch wrapper class in `api-client.js`
+- **Module-based:** `app.js` (main), `api-client.js` (API wrapper), `dashboard.js`, `transactions.js`, `charts.js`
+- **API client:** Singleton `APIClient` class with methods for all endpoints
 
 ### Database Schema (5 tables)
 
@@ -87,3 +89,19 @@ Required in `.env` (see `.env.example`):
 - `DATABASE_PATH` - SQLite location (default `./data/finance.db`)
 - `NODE_ENV` - Set to `development` for debug logging
 - `USE_DEMO_DB` - Set to `true` to use demo database (`./data/demo.db`)
+
+## API Endpoints
+
+Key endpoint groups (all prefixed with `/api/`):
+- **Accounts:** `GET /accounts`, `PUT /accounts/:id/name`
+- **Transactions:** `GET /transactions`, `POST /transactions`, `PUT /transactions/:id/category`, `PUT /transactions/:id/notes`
+- **Categories:** CRUD at `/categories`, `/categorization-rules`
+- **GoCardless:** `/gocardless/institutions`, `/gocardless/requisitions`, `/gocardless/requisition`
+- **Sync:** `POST /sync/accounts`, `POST /sync/transactions`
+- **Reports:** `/reports/monthly`, `/reports/category-breakdown`, `/reports/last-12-months`, `/reports/counterparty`
+
+## Notes
+
+- **No test suite:** Tests are not configured (`npm test` exits with error)
+- **Logging:** Debug logs written to `data/logs/app.log` when `NODE_ENV=development`
+- **Currency:** All amounts converted to EUR; BGN converted at fixed rate in `gocardless-api.js`

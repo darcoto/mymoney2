@@ -791,13 +791,18 @@ async function loadReportsPage() {
 
             // Show/hide sections
             const reportType = tab.dataset.report;
+            document.getElementById('monthlyReportSection').style.display = 'none';
+            document.getElementById('yearlyReportSection').style.display = 'none';
+            document.getElementById('countryReportSection').style.display = 'none';
+
             if (reportType === 'monthly') {
                 document.getElementById('monthlyReportSection').style.display = 'block';
-                document.getElementById('yearlyReportSection').style.display = 'none';
             } else if (reportType === 'yearly') {
-                document.getElementById('monthlyReportSection').style.display = 'none';
                 document.getElementById('yearlyReportSection').style.display = 'block';
                 generateYearlyReport();
+            } else if (reportType === 'country') {
+                document.getElementById('countryReportSection').style.display = 'block';
+                generateCountryReport();
             }
         });
     });
@@ -813,7 +818,43 @@ async function generateReport() {
     try {
         showLoader();
 
-        const report = await api.getMonthlyReport(year, month);
+        // Populate category dropdown if empty
+        const categorySelect = document.getElementById('reportFilterCategory');
+        if (categorySelect && categorySelect.options.length <= 1) {
+            const categories = await api.getCategories();
+            categories.forEach(cat => {
+                const option = document.createElement('option');
+                option.value = cat.id;
+                option.textContent = cat.name;
+                categorySelect.appendChild(option);
+            });
+        }
+
+        // Get selected transaction types
+        const types = [];
+        if (document.getElementById('reportFilterExpense')?.checked) types.push('expense');
+        if (document.getElementById('reportFilterIncome')?.checked) types.push('income');
+        if (document.getElementById('reportFilterTransfer')?.checked) types.push('transfer');
+
+        // Default to expense+income if nothing selected
+        if (types.length === 0) {
+            types.push('expense', 'income');
+            const expenseCheckbox = document.getElementById('reportFilterExpense');
+            const incomeCheckbox = document.getElementById('reportFilterIncome');
+            if (expenseCheckbox) expenseCheckbox.checked = true;
+            if (incomeCheckbox) incomeCheckbox.checked = true;
+        }
+
+        // Get selected category
+        const categoryId = categorySelect?.value || null;
+        const categoryName = categoryId ? categorySelect.options[categorySelect.selectedIndex].text : null;
+
+        // Store filters for click handlers
+        window.currentReportTypes = types;
+        window.currentReportCategory = categoryId;
+        window.currentReportCategoryName = categoryName;
+
+        const report = await api.getMonthlyReport(year, month, types, categoryId);
 
         // Show results
         document.getElementById('reportResults').style.display = 'block';
@@ -1159,7 +1200,7 @@ async function showAddManualTransactionModal() {
     }
 }
 
-async function showImportXmlModal() {
+async function showImportFileModal() {
     try {
         showLoader();
 
@@ -1168,35 +1209,38 @@ async function showImportXmlModal() {
         hideLoader();
 
         const modal = document.getElementById('modal');
-        document.getElementById('modalTitle').textContent = 'Импорт на транзакции от XML';
+        document.getElementById('modalTitle').textContent = 'Импорт на транзакции от файл';
         document.getElementById('modalSave').style.display = 'inline-block';
         document.getElementById('modalSave').textContent = 'Импорт';
         document.getElementById('modalCancel').textContent = 'Отказ';
 
-        // Build account options
+        // Build account options with institution info
         const accountOptions = accounts
             .map(acc => {
-                const displayName = acc.custom_name || acc.name || acc.institution_name || acc.iban;
-                return `<option value="${acc.id}">${escapeHtml(displayName)}</option>`;
+                const displayName = acc.custom_name || acc.name || acc.iban;
+                const institution = acc.institution_name || '';
+                const label = institution ? `${displayName} (${institution})` : displayName;
+                return `<option value="${acc.id}" data-institution="${escapeHtml(institution)}">${escapeHtml(label)}</option>`;
             })
             .join('');
 
         document.getElementById('modalBody').innerHTML = `
             <div class="filter-group">
-                <label>XML файл от Банка ДСК *</label>
-                <input type="file" id="importXmlFile" class="input" accept=".xml" required>
-                <small class="text-muted">Изберете XML файл, експортиран от Банка ДСК</small>
-            </div>
-            <div class="filter-group">
                 <label>Сметка *</label>
-                <select id="importXmlAccount" class="input" required>
+                <select id="importFileAccount" class="input" required>
                     <option value="">Изберете сметка</option>
                     ${accountOptions}
                 </select>
+                <small id="importFileFormat" class="text-muted"></small>
             </div>
             <div class="filter-group">
+                <label>Файл с транзакции *</label>
+                <input type="file" id="importFile" class="input" accept=".xml,.csv" required>
+                <small class="text-muted">Поддържани формати: XML (DSK Bank), CSV (Revolut)</small>
+            </div>
+            <div class="filter-group" id="importCurrencyGroup" style="display: none;">
                 <label>Валута на файла</label>
-                <select id="importXmlCurrency" class="input">
+                <select id="importFileCurrency" class="input">
                     <option value="BGN">BGN (ще се конвертира в EUR)</option>
                     <option value="EUR">EUR</option>
                 </select>
@@ -1212,17 +1256,41 @@ async function showImportXmlModal() {
 
         modal.classList.add('active');
 
-        const saveHandler = async () => {
-            const fileInput = document.getElementById('importXmlFile');
-            const accountId = document.getElementById('importXmlAccount').value;
-            const currency = document.getElementById('importXmlCurrency').value;
+        // Update format hint when account is selected
+        const accountSelect = document.getElementById('importFileAccount');
+        const formatHint = document.getElementById('importFileFormat');
+        const currencyGroup = document.getElementById('importCurrencyGroup');
 
-            if (!fileInput.files || fileInput.files.length === 0) {
-                showNotification('Моля, изберете XML файл', 'error');
-                return;
+        accountSelect.addEventListener('change', () => {
+            const selectedOption = accountSelect.options[accountSelect.selectedIndex];
+            const institution = (selectedOption.dataset.institution || '').toUpperCase();
+
+            if (institution.includes('DSK')) {
+                formatHint.textContent = '📄 Очаква се XML файл от Банка ДСК';
+                currencyGroup.style.display = 'block';
+            } else if (institution.includes('REVOLUT')) {
+                formatHint.textContent = '📄 Очаква се CSV файл от Revolut';
+                currencyGroup.style.display = 'none';
+            } else if (accountSelect.value) {
+                formatHint.textContent = '⚠️ Импортът не се поддържа за тази банка';
+                currencyGroup.style.display = 'none';
+            } else {
+                formatHint.textContent = '';
+                currencyGroup.style.display = 'none';
             }
+        });
+
+        const saveHandler = async () => {
+            const fileInput = document.getElementById('importFile');
+            const accountId = document.getElementById('importFileAccount').value;
+            const currency = document.getElementById('importFileCurrency').value;
+
             if (!accountId) {
                 showNotification('Моля, изберете сметка', 'error');
+                return;
+            }
+            if (!fileInput.files || fileInput.files.length === 0) {
+                showNotification('Моля, изберете файл', 'error');
                 return;
             }
 
@@ -1245,7 +1313,7 @@ async function showImportXmlModal() {
 
             try {
                 // Read file content
-                const xmlContent = await new Promise((resolve, reject) => {
+                const fileContent = await new Promise((resolve, reject) => {
                     const reader = new FileReader();
                     reader.onload = (e) => resolve(e.target.result);
                     reader.onerror = () => reject(new Error('Грешка при четене на файла'));
@@ -1255,8 +1323,8 @@ async function showImportXmlModal() {
                 progressFill.style.width = '60%';
                 statusText.textContent = 'Изпращане към сървъра...';
 
-                // Send to server
-                const result = await api.importXmlTransactions(xmlContent, accountId, currency);
+                // Send to server (parser is determined server-side based on account)
+                const result = await api.importFileTransactions(fileContent, accountId, currency);
 
                 progressFill.style.width = '100%';
                 statusText.textContent = 'Готово!';
@@ -1264,6 +1332,9 @@ async function showImportXmlModal() {
                 // Show results
                 let resultHtml = `<div class="alert ${result.imported > 0 ? 'alert-success' : 'alert-info'}">`;
                 resultHtml += `<strong>Резултат:</strong><br>`;
+                if (result.parser) {
+                    resultHtml += `📋 Парсер: ${result.parser}<br>`;
+                }
                 resultHtml += `✅ Импортирани: ${result.imported}<br>`;
                 resultHtml += `🏷️ Категоризирани: ${result.categorized || 0}<br>`;
                 resultHtml += `⏭️ Пропуснати (вече съществуват): ${result.skipped}<br>`;
@@ -1321,6 +1392,127 @@ async function showImportXmlModal() {
 }
 
 window.showCategoryTransactions = showCategoryTransactions;
+
+async function showCountryTransactions(countryCode, countryName) {
+    const types = window.currentCountryReportTypes || ['expense'];
+    const categoryId = window.currentCountryReportCategory || null;
+
+    try {
+        showLoader();
+
+        // Get transactions for this country with the selected types
+        const params = {
+            country: countryCode,
+            limit: 500
+        };
+
+        // If specific category is selected, pass it to API
+        if (categoryId) {
+            params.categoryId = categoryId;
+        }
+
+        const result = await api.getTransactions(params);
+        let transactions = result.transactions || result;
+
+        // Filter by category type on client side if needed (when no specific category)
+        if (!categoryId && types.length > 0 && types.length < 3) {
+            // Need to filter - get categories first
+            const categories = await api.getCategories();
+            const categoryTypeMap = {};
+            categories.forEach(c => categoryTypeMap[c.id] = c.type);
+
+            transactions = transactions.filter(tx => {
+                if (!tx.category_id) {
+                    // Uncategorized - include if 'expense' is selected (default assumption)
+                    return types.includes('expense');
+                }
+                const categoryType = categoryTypeMap[tx.category_id];
+                return types.includes(categoryType);
+            });
+        }
+
+        const modal = document.getElementById('modal');
+        const modalContent = modal.querySelector('.modal-content');
+        modalContent.style.maxWidth = '900px';
+
+        const typeLabels = {
+            'expense': '💸 Разходи',
+            'income': '💰 Приходи',
+            'transfer': '🔄 Трансфери'
+        };
+        const typeLabel = types.map(t => typeLabels[t] || t).join(', ');
+        const categoryName = window.currentCountryReportCategoryName;
+        const categoryLabel = categoryName ? ` | ${categoryName}` : '';
+
+        document.getElementById('modalTitle').textContent = `Транзакции: ${countryName} (${typeLabel}${categoryLabel})`;
+        document.getElementById('modalSave').style.display = 'none';
+        document.getElementById('modalCancel').textContent = 'Затвори';
+
+        if (!transactions || transactions.length === 0) {
+            document.getElementById('modalBody').innerHTML = '<p class="text-muted text-center">Няма транзакции за тази държава</p>';
+        } else {
+            let totalAmount = 0;
+            const rows = transactions.map(tx => {
+                totalAmount += tx.amount;
+                return `
+                    <tr>
+                        <td style="white-space: nowrap;">${formatDate(new Date(tx.transaction_date))}</td>
+                        <td>${escapeHtml(tx.counterparty_name || tx.description || '-')}</td>
+                        <td>
+                            ${tx.category_name
+                                ? `<span class="category-badge" style="background-color: ${tx.category_color}">${escapeHtml(tx.category_name)}</span>`
+                                : '<span class="text-muted">-</span>'}
+                        </td>
+                        <td class="${tx.amount >= 0 ? 'positive' : 'negative'}" style="text-align: right; font-weight: 600;">
+                            ${formatCurrency(tx.amount)}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            document.getElementById('modalBody').innerHTML = `
+                <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th style="width: 100px;">Дата</th>
+                                <th>Контрагент</th>
+                                <th style="width: 130px;">Категория</th>
+                                <th style="width: 120px; text-align: right;">Сума</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                        <tfoot style="font-weight: 600; background: #f5f5f5;">
+                            <tr>
+                                <td colspan="3" style="text-align: right;">Тотал (${transactions.length} транзакции):</td>
+                                <td class="${totalAmount >= 0 ? 'positive' : 'negative'}" style="text-align: right;">${formatCurrency(totalAmount)}</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            `;
+        }
+
+        modal.classList.add('active');
+
+        document.getElementById('modalCancel').onclick = () => {
+            modalContent.style.maxWidth = '';
+            modal.classList.remove('active');
+        };
+        document.querySelector('.modal-close').onclick = () => {
+            modalContent.style.maxWidth = '';
+            modal.classList.remove('active');
+        };
+
+    } catch (error) {
+        console.error('Error loading country transactions:', error);
+        showNotification('Грешка при зареждане на транзакции', 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+window.showCountryTransactions = showCountryTransactions;
 
 
 async function generateYearlyReport() {
@@ -1380,6 +1572,134 @@ async function generateYearlyReport() {
         hideLoader();
     }
 }
+
+async function generateCountryReport() {
+    try {
+        showLoader();
+
+        // Populate category dropdown if empty
+        const categorySelect = document.getElementById('countryFilterCategory');
+        if (categorySelect && categorySelect.options.length <= 1) {
+            const categories = await api.getCategories();
+            categories.forEach(cat => {
+                const option = document.createElement('option');
+                option.value = cat.id;
+                option.textContent = cat.name;
+                categorySelect.appendChild(option);
+            });
+        }
+
+        // Get selected transaction types
+        const types = [];
+        if (document.getElementById('countryFilterExpense')?.checked) types.push('expense');
+        if (document.getElementById('countryFilterIncome')?.checked) types.push('income');
+        if (document.getElementById('countryFilterTransfer')?.checked) types.push('transfer');
+
+        // Default to expense if nothing selected
+        if (types.length === 0) {
+            types.push('expense');
+            const expenseCheckbox = document.getElementById('countryFilterExpense');
+            if (expenseCheckbox) expenseCheckbox.checked = true;
+        }
+
+        // Get selected category (categorySelect already defined above)
+        const categoryId = categorySelect?.value || null;
+        const categoryName = categoryId ? categorySelect.options[categorySelect.selectedIndex].text : null;
+
+        const report = await api.getCountryReport(types, categoryId);
+
+        if (!report || !report.countries || report.countries.length === 0) {
+            const tbody = document.querySelector('#countryReportTable tbody');
+            const tfoot = document.querySelector('#countryReportTable tfoot');
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">Няма данни</td></tr>';
+            tfoot.innerHTML = '';
+            return;
+        }
+
+        // Update year headers
+        const years = report.years || [];
+        for (let i = 0; i < 5; i++) {
+            const yearEl = document.getElementById(`countryYear${5 - i}`);
+            if (yearEl) {
+                yearEl.textContent = years[i] || '';
+            }
+        }
+
+        const tbody = document.querySelector('#countryReportTable tbody');
+        const tfoot = document.querySelector('#countryReportTable tfoot');
+
+        // Calculate totals per year
+        const yearTotals = {};
+        years.forEach(y => yearTotals[y] = 0);
+        let grandTotal = 0;
+        let grandTotalCount = 0;
+
+        // Store filter types and category for use in click handler
+        window.currentCountryReportTypes = types;
+        window.currentCountryReportCategory = categoryId;
+        window.currentCountryReportCategoryName = categoryName;
+
+        tbody.innerHTML = report.countries.map(row => {
+            let rowTotal = 0;
+            const yearCells = years.map(year => {
+                const amount = row.years[year] || 0;
+                rowTotal += amount;
+                yearTotals[year] += amount;
+                const amountClass = amount > 0 ? 'positive' : (amount < 0 ? 'negative' : '');
+                return `<td style="text-align: right;" class="${amountClass}">${amount !== 0 ? formatCurrency(amount) : '-'}</td>`;
+            }).join('');
+
+            grandTotal += rowTotal;
+            grandTotalCount += row.totalCount || 0;
+            const totalClass = rowTotal > 0 ? 'positive' : (rowTotal < 0 ? 'negative' : '');
+
+            const countryDisplay = `${row.flag || ''} ${row.name || row.code}`.trim();
+
+            return `
+                <tr>
+                    <td>
+                        <span style="cursor: pointer; text-decoration: underline dotted;"
+                              onclick="showCountryTransactions('${row.code}', '${escapeHtml(countryDisplay).replace(/'/g, "\\'")}')">
+                            ${escapeHtml(countryDisplay)}
+                        </span>
+                    </td>
+                    ${yearCells}
+                    <td style="text-align: right;" class="${totalClass}">${formatCurrency(rowTotal)}</td>
+                    <td style="text-align: right;">${row.totalCount || 0}</td>
+                </tr>
+            `;
+        }).join('');
+
+        // Footer with totals
+        const footerYearCells = years.map(year => {
+            const amount = yearTotals[year];
+            const amountClass = amount > 0 ? 'positive' : (amount < 0 ? 'negative' : '');
+            return `<td style="text-align: right;" class="${amountClass}">${formatCurrency(amount)}</td>`;
+        }).join('');
+
+        const grandTotalClass = grandTotal > 0 ? 'positive' : (grandTotal < 0 ? 'negative' : '');
+        tfoot.innerHTML = `
+            <tr>
+                <td style="text-align: right;">Тотал:</td>
+                ${footerYearCells}
+                <td style="text-align: right;" class="${grandTotalClass}">${formatCurrency(grandTotal)}</td>
+                <td style="text-align: right;">${grandTotalCount}</td>
+            </tr>
+        `;
+
+        // Make table sortable
+        makeTableSortable('countryReportTable');
+
+    } catch (error) {
+        console.error('Error generating country report:', error);
+        showNotification('Грешка при генериране на отчет по държави', 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+// Add event listener for country report filter button
+document.getElementById('applyCountryFilter')?.addEventListener('click', generateCountryReport);
 
 // Settings Page
 async function loadSettingsPage() {
@@ -1994,7 +2314,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Transactions page buttons
     document.getElementById('addManualTransactionBtn')?.addEventListener('click', showAddManualTransactionModal);
-    document.getElementById('importXmlBtn')?.addEventListener('click', showImportXmlModal);
+    document.getElementById('importFileBtn')?.addEventListener('click', showImportFileModal);
 
     // Categories page buttons
     document.getElementById('addCategoryBtn')?.addEventListener('click', showAddCategoryModal);

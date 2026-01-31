@@ -185,6 +185,10 @@ async function initialize() {
           await runQuery('ALTER TABLE transactions ADD COLUMN original_currency TEXT');
         } catch (e) { /* Column already exists */ }
 
+        try {
+          await runQuery('ALTER TABLE transactions ADD COLUMN country TEXT');
+        } catch (e) { /* Column already exists */ }
+
         // Create special "Cash" account for manual transactions if it doesn't exist
         const cashAccount = await getQuery("SELECT id FROM accounts WHERE id = 'CASH'");
         if (!cashAccount) {
@@ -353,6 +357,15 @@ async function getTransactions(filters = {}) {
     params.push(`%${filters.search}%`, `%${filters.search}%`, `%${filters.search}%`);
   }
 
+  if (filters.country) {
+    if (filters.country === 'none') {
+      baseQuery += ' AND (t.country IS NULL OR t.country = "")';
+    } else {
+      baseQuery += ' AND t.country = ?';
+      params.push(filters.country);
+    }
+  }
+
   // Get total count and sum
   const statsResult = await getQuery(`SELECT COUNT(*) as total, SUM(t.amount) as totalAmount ${baseQuery}`, params);
   const total = statsResult?.total || 0;
@@ -388,7 +401,8 @@ async function upsertTransaction(transaction) {
         counterparty_name = ?,
         raw_data = ?,
         original_amount = ?,
-        original_currency = ?
+        original_currency = ?,
+        country = ?
        WHERE id = ?`,
       [
         transaction.transactionDate,
@@ -400,6 +414,7 @@ async function upsertTransaction(transaction) {
         transaction.rawData || null,
         transaction.originalAmount || null,
         transaction.originalCurrency || null,
+        transaction.country || null,
         transaction.id
       ]
     );
@@ -407,12 +422,13 @@ async function upsertTransaction(transaction) {
   } else {
     await runQuery(
       `INSERT INTO transactions (id, account_id, transaction_date, booking_date, amount,
-       currency, description, counterparty_name, category_id, raw_data, original_amount, original_currency)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       currency, description, counterparty_name, category_id, raw_data, original_amount, original_currency, country)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [transaction.id, transaction.accountId, transaction.transactionDate,
        transaction.bookingDate, transaction.amount, transaction.currency,
        transaction.description, transaction.counterpartyName, transaction.categoryId,
-       transaction.rawData || null, transaction.originalAmount || null, transaction.originalCurrency || null]
+       transaction.rawData || null, transaction.originalAmount || null, transaction.originalCurrency || null,
+       transaction.country || null]
     );
     return { isNew: true };
   }
@@ -450,15 +466,29 @@ async function updateTransactionNotes(id, notes) {
   return await runQuery('UPDATE transactions SET notes = ? WHERE id = ?', [notes, id]);
 }
 
-async function getTransactionStats(startDate, endDate) {
+async function updateTransactionCountry(id, country) {
+  return await runQuery('UPDATE transactions SET country = ? WHERE id = ?', [country, id]);
+}
+
+async function getTransactionsWithoutCountry() {
+  return await allQuery(`
+    SELECT id, counterparty_name
+    FROM transactions
+    WHERE (country IS NULL OR country = '')
+      AND counterparty_name IS NOT NULL
+      AND counterparty_name != ''
+  `);
+}
+
+async function getTransactionStats(startDate, endDate, types = null, categoryId = null) {
   let query = `
     SELECT
       SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as total_income,
       SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as total_expenses,
       COUNT(*) as total_transactions
     FROM transactions t
-    INNER JOIN categories c ON c.id = t.category_id
-    WHERE c.type <> 'transfer'
+    LEFT JOIN categories c ON c.id = t.category_id
+    WHERE 1=1
   `;
   const params = [];
 
@@ -470,6 +500,22 @@ async function getTransactionStats(startDate, endDate) {
   if (endDate) {
     query += ' AND transaction_date <= ?';
     params.push(endDate);
+  }
+
+  // Filter by transaction types
+  if (types && types.length > 0) {
+    const typePlaceholders = types.map(() => '?').join(', ');
+    query += ` AND (c.type IN (${typePlaceholders}) OR (c.type IS NULL AND 'expense' IN (${typePlaceholders})))`;
+    params.push(...types, ...types);
+  } else {
+    // By default exclude transfers
+    query += " AND (c.type IS NULL OR c.type <> 'transfer')";
+  }
+
+  // Filter by specific category
+  if (categoryId) {
+    query += ' AND t.category_id = ?';
+    params.push(categoryId);
   }
 
   return await getQuery(query, params);
@@ -556,15 +602,15 @@ async function deleteCategorizationRule(id) {
 }
 
 // Reports
-async function getMonthlyReport(year, month) {
+async function getMonthlyReport(year, month, types = null, categoryId = null) {
   const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
   const endDate = new Date(year, month, 0);
   const endDateStr = `${year}-${String(month).padStart(2, '0')}-${endDate.getDate()}`;
 
-  const stats = await getTransactionStats(startDate, endDateStr);
-  const categoryBreakdown = await getCategoryBreakdown(startDate, endDateStr);
-  const counterpartyBreakdown = await getCounterpartyReport(startDate, endDateStr);
-  const accountBreakdown = await getAccountBreakdown(startDate, endDateStr);
+  const stats = await getTransactionStats(startDate, endDateStr, types, categoryId);
+  const categoryBreakdown = await getCategoryBreakdown(startDate, endDateStr, types, categoryId);
+  const counterpartyBreakdown = await getCounterpartyReport(startDate, endDateStr, types, categoryId);
+  const accountBreakdown = await getAccountBreakdown(startDate, endDateStr, types, categoryId);
 
   return {
     period: { year, month, startDate, endDate: endDateStr },
@@ -607,7 +653,7 @@ async function getLast12MonthsReport() {
   return results;
 }
 
-async function getCategoryBreakdown(startDate, endDate, type = null, excludeTransfers = true) {
+async function getCategoryBreakdown(startDate, endDate, types = null, categoryId = null) {
   // Query for categorized transactions
   let query = `
     SELECT
@@ -632,53 +678,66 @@ async function getCategoryBreakdown(startDate, endDate, type = null, excludeTran
     params.push(endDate);
   }
 
-  if (type) {
-    query += ' AND c.type = ?';
-    params.push(type);
-  } else if (excludeTransfers) {
+  // Filter by transaction types
+  if (types && types.length > 0) {
+    const typePlaceholders = types.map(() => '?').join(', ');
+    query += ` AND c.type IN (${typePlaceholders})`;
+    params.push(...types);
+  } else {
+    // By default exclude transfers
     query += " AND c.type != 'transfer'";
+  }
+
+  // Filter by specific category
+  if (categoryId) {
+    query += ' AND c.id = ?';
+    params.push(categoryId);
   }
 
   query += ' GROUP BY c.id, c.name, c.type, c.color';
 
   const categorized = await allQuery(query, params);
 
-  // Query for uncategorized transactions
-  let uncatQuery = `
-    SELECT
-      COUNT(*) as count,
-      SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as income,
-      SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as expenses,
-      SUM(amount) as net
-    FROM transactions
-    WHERE category_id IS NULL
-  `;
-  const uncatParams = [];
+  // Query for uncategorized transactions (only if no specific category filter and types include 'expense' or no type filter)
+  let showUncategorized = !categoryId && (!types || types.includes('expense'));
+  
+  if (showUncategorized) {
+    let uncatQuery = `
+      SELECT
+        COUNT(*) as count,
+        SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as income,
+        SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as expenses,
+        SUM(amount) as net
+      FROM transactions
+      WHERE category_id IS NULL
+    `;
+    const uncatParams = [];
 
-  if (startDate) {
-    uncatQuery += ' AND transaction_date >= ?';
-    uncatParams.push(startDate);
-  }
+    if (startDate) {
+      uncatQuery += ' AND transaction_date >= ?';
+      uncatParams.push(startDate);
+    }
 
-  if (endDate) {
-    uncatQuery += ' AND transaction_date <= ?';
-    uncatParams.push(endDate);
-  }
+    if (endDate) {
+      uncatQuery += ' AND transaction_date <= ?';
+      uncatParams.push(endDate);
+    }
 
-  const uncategorized = await getQuery(uncatQuery, uncatParams);
+    const uncategorized = await getQuery(uncatQuery, uncatParams);
 
-  // Add uncategorized as a special category if there are any
-  if (uncategorized && uncategorized.count > 0) {
-    categorized.push({
-      id: null,
-      name: 'Без категория',
-      type: 'uncategorized',
-      color: '#999999',
-      count: uncategorized.count,
-      income: uncategorized.income || 0,
-      expenses: uncategorized.expenses || 0,
-      net: uncategorized.net || 0
-    });
+    // Add uncategorized as a special category if there are any
+    if (uncategorized && uncategorized.count > 0) {
+      categorized.push({
+        id: null,
+        name: 'Без категория',
+        type: 'uncategorized',
+        color: '#999999',
+        count: uncategorized.count,
+        income: uncategorized.income || 0,
+        expenses: uncategorized.expenses || 0,
+        net: uncategorized.net || 0
+      });
+    }
   }
 
   // Sort by count descending
@@ -715,30 +774,44 @@ async function deleteGoCardlessToken() {
 }
 
 // Counterparty report
-async function getCounterpartyReport(startDate, endDate) {
+async function getCounterpartyReport(startDate, endDate, types = null, categoryId = null) {
   let query = `
     SELECT
-      counterparty_name,
+      t.counterparty_name,
       COUNT(*) as transaction_count,
-      SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as total_income,
-      SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as total_expenses,
-      SUM(amount) as net_amount
-    FROM transactions
-    WHERE counterparty_name IS NOT NULL AND counterparty_name != ''
+      SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END) as total_income,
+      SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END) as total_expenses,
+      SUM(t.amount) as net_amount
+    FROM transactions t
+    LEFT JOIN categories c ON t.category_id = c.id
+    WHERE t.counterparty_name IS NOT NULL AND t.counterparty_name != ''
   `;
   const params = [];
 
   if (startDate) {
-    query += ' AND transaction_date >= ?';
+    query += ' AND t.transaction_date >= ?';
     params.push(startDate);
   }
 
   if (endDate) {
-    query += ' AND transaction_date <= ?';
+    query += ' AND t.transaction_date <= ?';
     params.push(endDate);
   }
 
-  query += ' GROUP BY counterparty_name ORDER BY transaction_count DESC';
+  // Filter by transaction types
+  if (types && types.length > 0) {
+    const typePlaceholders = types.map(() => '?').join(', ');
+    query += ` AND (c.type IN (${typePlaceholders}) OR (c.type IS NULL AND 'expense' IN (${typePlaceholders})))`;
+    params.push(...types, ...types);
+  }
+
+  // Filter by specific category
+  if (categoryId) {
+    query += ' AND t.category_id = ?';
+    params.push(categoryId);
+  }
+
+  query += ' GROUP BY t.counterparty_name ORDER BY transaction_count DESC';
 
   const results = await allQuery(query, params);
 
@@ -754,7 +827,7 @@ async function getCounterpartyReport(startDate, endDate) {
 }
 
 
-async function getAccountBreakdown(startDate, endDate) {
+async function getAccountBreakdown(startDate, endDate, types = null, categoryId = null) {
   let query = `
     SELECT
       a.id, a.custom_name, a.name, a.institution_name,
@@ -764,6 +837,7 @@ async function getAccountBreakdown(startDate, endDate) {
       SUM(t.amount) as net
     FROM transactions t
     JOIN accounts a ON t.account_id = a.id
+    LEFT JOIN categories c ON t.category_id = c.id
     WHERE 1=1
   `;
   const params = [];
@@ -776,6 +850,19 @@ async function getAccountBreakdown(startDate, endDate) {
   if (endDate) {
     query += ' AND t.transaction_date <= ?';
     params.push(endDate);
+  }
+
+  // Filter by transaction types
+  if (types && types.length > 0) {
+    const typePlaceholders = types.map(() => '?').join(', ');
+    query += ` AND (c.type IN (${typePlaceholders}) OR (c.type IS NULL AND 'expense' IN (${typePlaceholders})))`;
+    params.push(...types, ...types);
+  }
+
+  // Filter by specific category
+  if (categoryId) {
+    query += ' AND t.category_id = ?';
+    params.push(categoryId);
   }
 
   query += ' GROUP BY a.id ORDER BY count DESC';
@@ -884,6 +971,79 @@ async function getAccountsByInstitution(pattern) {
   );
 }
 
+/**
+ * Get distinct countries from transactions
+ * @returns {Array} Array of country codes
+ */
+async function getDistinctCountries() {
+  return allQuery(
+    `SELECT DISTINCT country FROM transactions
+     WHERE country IS NOT NULL AND country != ''
+     ORDER BY country`
+  );
+}
+
+/**
+ * Get country report - amounts by country and year, filtered by transaction type
+ * @param {Array} types - Array of category types to include: 'expense', 'income', 'transfer'
+ * @returns {Object} Report data with years and countries
+ */
+async function getCountryReport(types = ['expense'], categoryId = null) {
+  const currentYear = new Date().getFullYear();
+  const years = [currentYear, currentYear - 1, currentYear - 2, currentYear - 3, currentYear - 4];
+
+  // Build type filter
+  const typePlaceholders = types.map(() => '?').join(', ');
+
+  // Build category filter
+  const categoryFilter = categoryId ? 'AND t.category_id = ?' : '';
+  const params = [...types, ...types];
+  if (categoryId) {
+    params.push(categoryId);
+  }
+
+  const result = await allQuery(`
+    SELECT
+      t.country,
+      strftime('%Y', t.transaction_date) as year,
+      SUM(t.amount) as amount,
+      COUNT(*) as count
+    FROM transactions t
+    LEFT JOIN categories c ON t.category_id = c.id
+    WHERE t.country IS NOT NULL AND t.country != ''
+      AND (c.type IN (${typePlaceholders}) OR (c.type IS NULL AND 'expense' IN (${typePlaceholders})))
+      ${categoryFilter}
+    GROUP BY t.country, strftime('%Y', t.transaction_date)
+    ORDER BY t.country, year DESC
+  `, params);
+
+  // Reorganize data by country
+  const countryData = {};
+  result.forEach(row => {
+    if (!countryData[row.country]) {
+      countryData[row.country] = {
+        code: row.country,
+        years: {},
+        yearCounts: {},
+        total: 0,
+        totalCount: 0
+      };
+    }
+    countryData[row.country].years[row.year] = row.amount;
+    countryData[row.country].yearCounts[row.year] = row.count;
+    countryData[row.country].total += row.amount;
+    countryData[row.country].totalCount += row.count;
+  });
+
+  // Convert to array and sort by total (absolute value for mixed types)
+  const countries = Object.values(countryData).sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+
+  return {
+    years,
+    countries
+  };
+}
+
 module.exports = {
   initialize,
   getAllAccounts,
@@ -896,6 +1056,8 @@ module.exports = {
   updateTransactionCategory,
   categorizeByCounterparty,
   updateTransactionNotes,
+  updateTransactionCountry,
+  getTransactionsWithoutCountry,
   getTransactionStats,
   getAllCategories,
   createCategory,
@@ -919,5 +1081,7 @@ module.exports = {
   deleteCounterpartyAlias,
   getCategoryByCounterparty,
   importTransactionsBatch,
-  getAccountsByInstitution
+  getAccountsByInstitution,
+  getDistinctCountries,
+  getCountryReport
 };

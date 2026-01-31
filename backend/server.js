@@ -8,6 +8,8 @@ const logger = require('./logger');
 
 const categorization = require('./categorization');
 const xmlImport = require('./xml-import');
+const revolutImport = require('./revolut-import');
+const countryUtils = require('./country-codes');
 
 const app = express();
 
@@ -185,6 +187,7 @@ app.get('/api/transactions', async (req, res) => {
       categoryId: req.query.category_id,
       type: req.query.type,
       search: req.query.search,
+      country: req.query.country,
       limit: parseInt(req.query.limit) || 50,
       offset: parseInt(req.query.offset) || 0
     };
@@ -248,27 +251,45 @@ app.put('/api/transactions/:id/notes', async (req, res) => {
   }
 });
 
-// Import transactions from XML file (DSK Bank format)
-app.post('/api/transactions/import-xml', async (req, res) => {
+// Import transactions from file (auto-detect parser based on account institution)
+app.post('/api/transactions/import-file', async (req, res) => {
   try {
-    const { xmlContent, accountId, currency } = req.body;
+    const { fileContent, accountId, currency } = req.body;
 
     // Validate input
-    if (!xmlContent) {
-      return res.status(400).json({ error: 'XML съдържанието е задължително' });
+    if (!fileContent) {
+      return res.status(400).json({ error: 'Съдържанието на файла е задължително' });
     }
     if (!accountId) {
       return res.status(400).json({ error: 'Сметката е задължителна' });
     }
 
-    // Verify account exists
+    // Verify account exists and get institution info
     const account = await database.getAccountById(accountId);
     if (!account) {
       return res.status(404).json({ error: 'Сметката не е намерена' });
     }
 
-    // Parse XML and prepare transactions
-    const transactions = xmlImport.processXmlForImport(xmlContent, accountId, currency || 'BGN');
+    const institutionName = (account.institution_name || '').toUpperCase();
+    let transactions = [];
+    let parserName = '';
+
+    // Determine parser based on institution name
+    if (institutionName.includes('DSK')) {
+      // DSK Bank - XML parser
+      parserName = 'DSK Bank (XML)';
+      transactions = xmlImport.processXmlForImport(fileContent, accountId, currency || 'BGN');
+    } else if (institutionName.includes('REVOLUT')) {
+      // Revolut - CSV parser
+      parserName = 'Revolut (CSV)';
+      transactions = revolutImport.processCsvForImport(fileContent, accountId);
+    } else {
+      return res.status(400).json({
+        error: `Не се поддържа импорт за банка "${account.institution_name}". Поддържани банки: DSK Bank, Revolut`
+      });
+    }
+
+    logger.info(`[File Import] Using parser: ${parserName} for account ${accountId}`);
 
     if (transactions.length === 0) {
       return res.json({
@@ -278,7 +299,8 @@ app.post('/api/transactions/import-xml', async (req, res) => {
         categorized: 0,
         errors: [],
         total: 0,
-        message: 'Няма намерени транзакции в XML файла'
+        parser: parserName,
+        message: 'Няма намерени транзакции във файла'
       });
     }
 
@@ -305,7 +327,7 @@ app.post('/api/transactions/import-xml', async (req, res) => {
     // Import transactions in batch
     const results = await database.importTransactionsBatch(transactions);
 
-    logger.info(`[XML Import] Imported ${results.imported}, skipped ${results.skipped}, categorized ${categorizedCount}, errors: ${results.errors.length}`);
+    logger.info(`[File Import] ${parserName}: Imported ${results.imported}, skipped ${results.skipped}, categorized ${categorizedCount}, errors: ${results.errors.length}`);
 
     res.json({
       success: true,
@@ -313,10 +335,11 @@ app.post('/api/transactions/import-xml', async (req, res) => {
       skipped: results.skipped,
       categorized: categorizedCount,
       errors: results.errors,
-      total: transactions.length
+      total: transactions.length,
+      parser: parserName
     });
   } catch (error) {
-    logger.error(`[XML Import] Error: ${error.message}`);
+    logger.error(`[File Import] Error: ${error.message}`);
     res.status(500).json({ error: error.message });
   }
 });
@@ -421,8 +444,27 @@ app.delete('/api/categorization-rules/:id', async (req, res) => {
 
 app.post('/api/categorization-rules/apply', async (req, res) => {
   try {
+    // Apply categorization rules
     const result = await categorization.applyRulesToUncategorized();
-    res.json({ success: true, ...result });
+
+    // Extract countries from transactions without country
+    const transactionsWithoutCountry = await database.getTransactionsWithoutCountry();
+    let countriesExtracted = 0;
+
+    for (const tx of transactionsWithoutCountry) {
+      const country = countryUtils.extractCountryFromCounterparty(tx.counterparty_name);
+      if (country) {
+        await database.updateTransactionCountry(tx.id, country);
+        countriesExtracted++;
+      }
+    }
+
+    res.json({
+      success: true,
+      ...result,
+      countriesExtracted,
+      totalWithoutCountry: transactionsWithoutCountry.length
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -431,8 +473,17 @@ app.post('/api/categorization-rules/apply', async (req, res) => {
 // Reports routes
 app.get('/api/reports/monthly', async (req, res) => {
   try {
-    const { year, month } = req.query;
-    const report = await database.getMonthlyReport(year, month);
+    const { year, month, category_id } = req.query;
+
+    // Get types from query - can be single value or array
+    let types = req.query.types;
+    if (!types) {
+      types = null; // All types
+    } else if (!Array.isArray(types)) {
+      types = [types];
+    }
+
+    const report = await database.getMonthlyReport(year, month, types, category_id);
     res.json(report);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -451,7 +502,9 @@ app.get('/api/reports/last-12-months', async (req, res) => {
 app.get('/api/reports/category-breakdown', async (req, res) => {
   try {
     const { start_date, end_date, type } = req.query;
-    const breakdown = await database.getCategoryBreakdown(start_date, end_date, type);
+    // Convert single type to array for compatibility
+    const types = type ? [type] : null;
+    const breakdown = await database.getCategoryBreakdown(start_date, end_date, types);
     res.json(breakdown);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -463,6 +516,67 @@ app.get('/api/reports/counterparty', async (req, res) => {
     const { start_date, end_date } = req.query;
     const report = await database.getCounterpartyReport(start_date, end_date);
     res.json(report);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Country report
+app.get('/api/reports/country', async (req, res) => {
+  try {
+    // Get types from query - can be single value or array
+    let types = req.query.types;
+    if (!types) {
+      types = ['expense'];
+    } else if (!Array.isArray(types)) {
+      types = [types];
+    }
+
+    // Get category filter
+    const categoryId = req.query.category_id || null;
+
+    const report = await database.getCountryReport(types, categoryId);
+    // Add country info (name, flag) to each country
+    const enrichedCountries = report.countries.map(country => {
+      const info = countryUtils.getCountryInfo(country.code);
+      return {
+        ...country,
+        name: info?.name || country.code,
+        flag: info?.flag || ''
+      };
+    });
+    res.json({
+      years: report.years,
+      countries: enrichedCountries
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get distinct countries for filter
+app.get('/api/countries', async (req, res) => {
+  try {
+    const countries = await database.getDistinctCountries();
+    // Add country info (name, flag) to each
+    const enrichedCountries = countries.map(row => ({
+      code: row.country,
+      ...countryUtils.getCountryInfo(row.country)
+    }));
+    res.json(enrichedCountries);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get country info by code
+app.get('/api/countries/:code', async (req, res) => {
+  try {
+    const info = countryUtils.getCountryInfo(req.params.code);
+    if (!info) {
+      return res.status(404).json({ error: 'Държавата не е намерена' });
+    }
+    res.json({ code: req.params.code, ...info });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -522,8 +636,11 @@ app.get('/api/logs', async (req, res) => {
 app.post('/api/backup', async (req, res) => {
   try {
     const dbPath = config.databasePath || './data/finance.db';
-    const today = new Date().toISOString().split('T')[0];
-    const backupPath = dbPath.replace('.db', `_backup_${today}.db`);
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const backupPath = dbPath.replace('.db', `_backup_${dateStr}_${hours}${minutes}.db`);
 
     // Check if source exists
     if (!fs.existsSync(dbPath)) {

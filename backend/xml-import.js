@@ -6,6 +6,7 @@
 const { XMLParser } = require('fast-xml-parser');
 const crypto = require('crypto');
 const logger = require('./logger');
+const { extractCountryFromCounterparty } = require('./country-codes');
 
 /**
  * Parse DSK Bank XML format and extract transactions
@@ -202,6 +203,9 @@ function processXmlForImport(xmlContent, accountId, currency = 'BGN') {
             amount: movement.amount, // Use original amount for ID consistency
             counterpartyName: movement.counterpartyName
         });
+
+        // Extract country from counterparty name if present
+        transaction.country = extractCountryFromCounterparty(movement.counterpartyName);
 
         return transaction;
     });

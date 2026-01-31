@@ -157,8 +157,17 @@ class APIClient {
     }
 
     // Reports
-    async getMonthlyReport(year, month) {
-        return this.request(`/reports/monthly?year=${year}&month=${month}`);
+    async getMonthlyReport(year, month, types = null, categoryId = null) {
+        const params = new URLSearchParams();
+        params.append('year', year);
+        params.append('month', month);
+        if (types && types.length > 0) {
+            types.forEach(type => params.append('types', type));
+        }
+        if (categoryId) {
+            params.append('category_id', categoryId);
+        }
+        return this.request(`/reports/monthly?${params.toString()}`);
     }
 
     async getLast12MonthsReport() {
@@ -249,16 +258,30 @@ class APIClient {
         });
     }
 
-    // XML Import
-    async importXmlTransactions(xmlContent, accountId, currency) {
-        return this.request('/transactions/import-xml', {
+    // File Import (auto-detect parser based on account)
+    async importFileTransactions(fileContent, accountId, currency = null) {
+        return this.request('/transactions/import-file', {
             method: 'POST',
-            body: JSON.stringify({ xmlContent, accountId, currency })
+            body: JSON.stringify({ fileContent, accountId, currency })
         });
     }
 
     async getAccountsByInstitution(pattern) {
         return this.request(`/accounts/by-institution/${encodeURIComponent(pattern)}`);
+    }
+
+    // Countries
+    async getCountries() {
+        return this.request('/countries');
+    }
+
+    async getCountryReport(types = ['expense'], categoryId = null) {
+        const params = new URLSearchParams();
+        types.forEach(type => params.append('types', type));
+        if (categoryId) {
+            params.append('category_id', categoryId);
+        }
+        return this.request(`/reports/country?${params.toString()}`);
     }
 }
 
