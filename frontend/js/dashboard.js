@@ -35,7 +35,7 @@ class Dashboard {
             const accounts = await api.getAccounts();
             const totalBalance = accounts.reduce((sum, acc) => sum + (acc.balance || 0), 0);
 
-            document.getElementById('totalBalance').textContent = formatCurrency(totalBalance);
+            document.getElementById('totalBalance').innerHTML = formatCurrency(totalBalance);
 
             // Get current month stats
             const now = new Date();
@@ -51,9 +51,9 @@ class Dashboard {
             const expenses = stats.total_expenses || 0;
             const savings = income - expenses;
 
-            document.getElementById('monthlyIncome').textContent = formatCurrency(income);
-            document.getElementById('monthlyExpenses').textContent = formatCurrency(expenses);
-            document.getElementById('monthlySavings').textContent = formatCurrency(savings);
+            document.getElementById('monthlyIncome').innerHTML = formatCurrency(income);
+            document.getElementById('monthlyExpenses').innerHTML = formatCurrency(expenses);
+            document.getElementById('monthlySavings').innerHTML = formatCurrency(savings);
 
             // Update savings color
             const savingsEl = document.getElementById('monthlySavings');

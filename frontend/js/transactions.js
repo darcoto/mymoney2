@@ -473,7 +473,12 @@ class TransactionsPage {
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Сметка:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(accountName)} <span style="color: #888; font-size: 11px;">(${escapeHtml(account?.iban || '')})</span></td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Дата:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.transaction_date}</td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Дата осчетов.:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.booking_date || '-'}</td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Държава:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.country ? (() => { const countryInfo = this.countries.find(c => c.code === transaction.country); return (countryInfo?.flag || '') + ' ' + (countryInfo?.name || transaction.country); })() : '-'}</td></tr>
+                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Държава:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">
+                            <select id="modalCountrySelect" style="padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; min-width: 150px;">
+                                <option value="">-- Без държава --</option>
+                                ${this.countries.map(c => `<option value="${c.code}" ${transaction.country === c.code ? 'selected' : ''}>${c.flag || ''} ${c.name || c.code}</option>`).join('')}
+                            </select>
+                        </td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Създадена:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.created_at || '-'}</td></tr>
                     </table>
 
@@ -566,6 +571,19 @@ class TransactionsPage {
                 transaction.notes = notes;
                 await this.loadTransactions();
                 showNotification('Бележките са запазени', 'success');
+            } catch (error) {
+                showNotification('Грешка при запазване: ' + error.message, 'error');
+            }
+        });
+
+        // Auto-save country on change
+        document.getElementById('modalCountrySelect')?.addEventListener('change', async (e) => {
+            const country = e.target.value || null;
+            try {
+                await api.updateTransactionCountry(transaction.id, country);
+                transaction.country = country;
+                await this.loadTransactions();
+                showNotification('Държавата е записана', 'success');
             } catch (error) {
                 showNotification('Грешка при запазване: ' + error.message, 'error');
             }

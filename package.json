@@ -3,6 +3,16 @@
   "version": "1.0.0",
   "description": "Personal finance management application with GoCardless integration",
   "main": "backend/server.js",
+  "bin": {
+    "mymoney2": "./bin/cli.js"
+  },
+  "files": [
+    "bin/",
+    "backend/",
+    "frontend/",
+    "VERSION",
+    ".env.example"
+  ],
   "scripts": {
     "start": "node backend/server.js",
     "dev": "nodemon backend/server.js",
@@ -10,20 +20,27 @@
     "seed-demo": "node backend/seed-demo.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "engines": {
+    "node": ">=16.0.0"
+  },
   "keywords": [
     "finance",
     "banking",
     "gocardless",
-    "transactions"
+    "transactions",
+    "budget",
+    "cli"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "axios": "^1.6.0",
+    "commander": "^14.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "fast-xml-parser": "^4.3.2",
+    "open": "^11.0.0",
     "sqlite3": "^5.1.6"
   },
   "devDependencies": {

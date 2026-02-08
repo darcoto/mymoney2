@@ -2,10 +2,10 @@
 
 // Utility functions
 function formatCurrency(amount) {
-    const absAmount = Math.abs(amount);
-    const formatted = absAmount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    const absAmount = Math.round(Math.abs(amount));
+    const formatted = absAmount.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
     const sign = amount < 0 ? '-' : '';
-    return `${sign}${formatted} €`;
+    return `${sign}${formatted} <span class="currency-symbol">€</span>`;
 }
 
 function formatDate(date) {
@@ -794,6 +794,7 @@ async function loadReportsPage() {
             document.getElementById('monthlyReportSection').style.display = 'none';
             document.getElementById('yearlyReportSection').style.display = 'none';
             document.getElementById('countryReportSection').style.display = 'none';
+            document.getElementById('categoryReportSection').style.display = 'none';
 
             if (reportType === 'monthly') {
                 document.getElementById('monthlyReportSection').style.display = 'block';
@@ -803,6 +804,9 @@ async function loadReportsPage() {
             } else if (reportType === 'country') {
                 document.getElementById('countryReportSection').style.display = 'block';
                 generateCountryReport();
+            } else if (reportType === 'category') {
+                document.getElementById('categoryReportSection').style.display = 'block';
+                generateCategoryReport();
             }
         });
     });
@@ -860,12 +864,12 @@ async function generateReport() {
         document.getElementById('reportResults').style.display = 'block';
 
         // Update stats
-        document.getElementById('reportIncome').textContent = formatCurrency(report.stats.total_income || 0);
-        document.getElementById('reportExpenses').textContent = formatCurrency(report.stats.total_expenses || 0);
+        document.getElementById('reportIncome').innerHTML = formatCurrency(report.stats.total_income || 0);
+        document.getElementById('reportExpenses').innerHTML = formatCurrency(report.stats.total_expenses || 0);
 
         const balance = (report.stats.total_income || 0) - (report.stats.total_expenses || 0);
         const balanceEl = document.getElementById('reportBalance');
-        balanceEl.textContent = formatCurrency(balance);
+        balanceEl.innerHTML = formatCurrency(balance);
         balanceEl.className = 'amount';
         if (balance > 0) balanceEl.classList.add('positive');
         else if (balance < 0) balanceEl.classList.add('negative');
@@ -1701,6 +1705,108 @@ async function generateCountryReport() {
 // Add event listener for country report filter button
 document.getElementById('applyCountryFilter')?.addEventListener('click', generateCountryReport);
 
+// Category Report (Last 12 months by category)
+async function generateCategoryReport() {
+    try {
+        showLoader();
+
+        // Get selected transaction types
+        const types = [];
+        if (document.getElementById('categoryReportFilterExpense')?.checked) types.push('expense');
+        if (document.getElementById('categoryReportFilterIncome')?.checked) types.push('income');
+        if (document.getElementById('categoryReportFilterTransfer')?.checked) types.push('transfer');
+
+        // Default to expense if nothing selected
+        if (types.length === 0) {
+            types.push('expense');
+            const expenseCheckbox = document.getElementById('categoryReportFilterExpense');
+            if (expenseCheckbox) expenseCheckbox.checked = true;
+        }
+
+        const report = await api.getCategoryMonthlyReport(types);
+
+        if (!report || !report.categories || report.categories.length === 0) {
+            const tbody = document.querySelector('#categoryReportTable tbody');
+            const tfoot = document.querySelector('#categoryReportTable tfoot');
+            tbody.innerHTML = '<tr><td colspan="14" class="text-center text-muted">Няма данни</td></tr>';
+            tfoot.innerHTML = '';
+            return;
+        }
+
+        // Update month headers
+        const months = report.months || [];
+        for (let i = 0; i < 12; i++) {
+            const monthEl = document.getElementById(`catMonth${12 - i}`);
+            if (monthEl && months[i]) {
+                monthEl.textContent = months[i].label;
+            }
+        }
+
+        const tbody = document.querySelector('#categoryReportTable tbody');
+        const tfoot = document.querySelector('#categoryReportTable tfoot');
+
+        // Calculate totals per month
+        const monthTotals = {};
+        months.forEach(m => monthTotals[m.key] = 0);
+        let grandTotal = 0;
+
+        tbody.innerHTML = report.categories.map(row => {
+            let rowTotal = 0;
+            const monthCells = months.map(month => {
+                const data = row.months[month.key];
+                const amount = data ? data.amount : 0;
+                rowTotal += amount;
+                monthTotals[month.key] += amount;
+                const amountClass = amount > 0 ? 'positive' : (amount < 0 ? 'negative' : '');
+                return `<td style="text-align: right;" class="${amountClass}">${amount !== 0 ? formatCurrency(amount) : '-'}</td>`;
+            }).join('');
+
+            grandTotal += rowTotal;
+            const totalClass = rowTotal > 0 ? 'positive' : (rowTotal < 0 ? 'negative' : '');
+
+            return `
+                <tr>
+                    <td>
+                        <span class="category-badge" style="background-color: ${row.color};">
+                            ${escapeHtml(row.name)}
+                        </span>
+                    </td>
+                    ${monthCells}
+                    <td style="text-align: right;" class="${totalClass}">${formatCurrency(rowTotal)}</td>
+                </tr>
+            `;
+        }).join('');
+
+        // Footer with totals
+        const footerMonthCells = months.map(month => {
+            const amount = monthTotals[month.key];
+            const amountClass = amount > 0 ? 'positive' : (amount < 0 ? 'negative' : '');
+            return `<td style="text-align: right;" class="${amountClass}">${formatCurrency(amount)}</td>`;
+        }).join('');
+
+        const grandTotalClass = grandTotal > 0 ? 'positive' : (grandTotal < 0 ? 'negative' : '');
+        tfoot.innerHTML = `
+            <tr>
+                <td style="text-align: right;">Тотал:</td>
+                ${footerMonthCells}
+                <td style="text-align: right;" class="${grandTotalClass}">${formatCurrency(grandTotal)}</td>
+            </tr>
+        `;
+
+        // Make table sortable
+        makeTableSortable('categoryReportTable');
+
+    } catch (error) {
+        console.error('Error generating category report:', error);
+        showNotification('Грешка при генериране на справка по категории', 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+// Add event listener for category report filter button
+document.getElementById('applyCategoryReportFilter')?.addEventListener('click', generateCategoryReport);
+
 // Settings Page
 async function loadSettingsPage() {
     try {
@@ -1725,6 +1831,14 @@ async function loadSettingsPage() {
         // Load accounts
         const accounts = await api.getAccounts();
         renderAccountsList(accounts);
+
+        // Load version
+        try {
+            const versionData = await fetch('/api/version').then(r => r.json());
+            document.getElementById('appVersion').textContent = versionData.version;
+        } catch (e) {
+            document.getElementById('appVersion').textContent = 'неизвестна';
+        }
 
     } catch (error) {
         console.error('Error loading settings:', error);

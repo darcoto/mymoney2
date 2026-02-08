@@ -319,6 +319,7 @@
                         <button class="btn btn-primary report-tab active" data-report="monthly">📊 Месечен отчет</button>
                         <button class="btn btn-secondary report-tab" data-report="yearly">📅 По месеци</button>
                         <button class="btn btn-secondary report-tab" data-report="country">🌍 По държави</button>
+                        <button class="btn btn-secondary report-tab" data-report="category">📁 По категории</button>
                     </div>
                 </div>
             </div>
@@ -546,6 +547,61 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Category Report Section (Last 12 months by category) -->
+            <div id="categoryReportSection" style="display: none;">
+                <div class="card" style="margin-bottom: 16px;">
+                    <div class="card-body" style="padding: 12px 16px;">
+                        <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+                            <span style="font-weight: 500;">Тип:</span>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                <input type="checkbox" id="categoryReportFilterExpense" checked style="width: 16px; height: 16px;">
+                                <span>💸 Разходи</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                <input type="checkbox" id="categoryReportFilterIncome" style="width: 16px; height: 16px;">
+                                <span>💰 Приходи</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                <input type="checkbox" id="categoryReportFilterTransfer" style="width: 16px; height: 16px;">
+                                <span>🔄 Трансфери</span>
+                            </label>
+                            <button id="applyCategoryReportFilter" class="btn btn-primary btn-sm">Приложи</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Категории - Последни 12 месеца</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table id="categoryReportTable" class="table sortable">
+                                <thead>
+                                    <tr>
+                                        <th>Категория</th>
+                                        <th id="catMonth12" style="text-align: right;"></th>
+                                        <th id="catMonth11" style="text-align: right;"></th>
+                                        <th id="catMonth10" style="text-align: right;"></th>
+                                        <th id="catMonth9" style="text-align: right;"></th>
+                                        <th id="catMonth8" style="text-align: right;"></th>
+                                        <th id="catMonth7" style="text-align: right;"></th>
+                                        <th id="catMonth6" style="text-align: right;"></th>
+                                        <th id="catMonth5" style="text-align: right;"></th>
+                                        <th id="catMonth4" style="text-align: right;"></th>
+                                        <th id="catMonth3" style="text-align: right;"></th>
+                                        <th id="catMonth2" style="text-align: right;"></th>
+                                        <th id="catMonth1" style="text-align: right;"></th>
+                                        <th style="text-align: right;">Общо</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                                <tfoot style="font-weight: 600; background: #f5f5f5;"></tfoot>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Settings Page -->
@@ -625,7 +681,7 @@
                 </div>
                 <div class="card-body">
                     <p><strong>MyMoney<sup>2</sup></strong> - Управление на лични финанси</p>
-                    <p>Версия: 1.0.0</p>
+                    <p>Версия: <span id="appVersion">...</span></p>
                     <p>Интеграция с GoCardless Bank Account Data API</p>
                     <p style="margin-top: 12px;">
                         <button id="toggleLogsBtn" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px;">

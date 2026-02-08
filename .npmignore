@@ -1,0 +1,15 @@
+node_modules/
+.env
+.git/
+.gitignore
+.claude/
+.serena/
+data/
+import/
+screenshots/
+*.log
+.vscode/
+.idea/
+start.bat
+CLAUDE.md
+package-lock.json

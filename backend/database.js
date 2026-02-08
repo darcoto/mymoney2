@@ -1044,6 +1044,71 @@ async function getCountryReport(types = ['expense'], categoryId = null) {
   };
 }
 
+
+async function getCategoryMonthlyReport(types = ['expense']) {
+  // Generate last 12 months
+  const months = [];
+  const now = new Date();
+  for (let i = 0; i < 12; i++) {
+    const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({
+      year: date.getFullYear(),
+      month: date.getMonth() + 1,
+      key: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
+      label: `${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`
+    });
+  }
+
+  // Build type filter
+  const typePlaceholders = types.map(() => '?').join(', ');
+
+  const result = await allQuery(`
+    SELECT
+      c.id,
+      c.name,
+      c.color,
+      c.type,
+      strftime('%Y-%m', t.transaction_date) as month_key,
+      SUM(t.amount) as amount,
+      COUNT(*) as count
+    FROM transactions t
+    JOIN categories c ON t.category_id = c.id
+    WHERE c.type IN (${typePlaceholders})
+    GROUP BY c.id, c.name, c.color, c.type, strftime('%Y-%m', t.transaction_date)
+    ORDER BY c.name, month_key DESC
+  `, types);
+
+  // Reorganize data by category
+  const categoryData = {};
+  result.forEach(row => {
+    if (!categoryData[row.id]) {
+      categoryData[row.id] = {
+        id: row.id,
+        name: row.name,
+        color: row.color,
+        type: row.type,
+        months: {},
+        total: 0,
+        totalCount: 0
+      };
+    }
+    categoryData[row.id].months[row.month_key] = {
+      amount: row.amount,
+      count: row.count
+    };
+    categoryData[row.id].total += row.amount;
+    categoryData[row.id].totalCount += row.count;
+  });
+
+  // Convert to array and sort by total (absolute value)
+  const categories = Object.values(categoryData).sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+
+  return {
+    months,
+    categories
+  };
+}
+
 module.exports = {
   initialize,
   getAllAccounts,
@@ -1083,5 +1148,6 @@ module.exports = {
   importTransactionsBatch,
   getAccountsByInstitution,
   getDistinctCountries,
-  getCountryReport
+  getCountryReport,
+  getCategoryMonthlyReport
 };

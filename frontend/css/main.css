@@ -301,6 +301,12 @@ body {
     color: var(--danger-color);
 }
 
+/* Currency symbol */
+.currency-symbol {
+    opacity: 0.5;
+    font-weight: 400;
+}
+
 /* Text utilities */
 .text-center {
     text-align: center;

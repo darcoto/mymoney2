@@ -53,7 +53,7 @@ class ChartsManager {
                                 if (label) {
                                     label += ': ';
                                 }
-                                label += context.parsed.y.toFixed(2) + ' €';
+                                label += Math.round(context.parsed.y) + ' €';
                                 return label;
                             }
                         }
@@ -64,7 +64,7 @@ class ChartsManager {
                         beginAtZero: true,
                         ticks: {
                             callback: function(value) {
-                                return value + ' €';
+                                return Math.round(value) + ' €';
                             }
                         }
                     }
@@ -104,7 +104,7 @@ class ChartsManager {
                                 const value = context.parsed;
                                 const total = context.dataset.data.reduce((a, b) => a + b, 0);
                                 const percentage = ((value / total) * 100).toFixed(1);
-                                return `${label}: ${value.toFixed(2)} € (${percentage}%)`;
+                                return `${label}: ${Math.round(value)} € (${percentage}%)`;
                             }
                         }
                     }
@@ -141,7 +141,7 @@ class ChartsManager {
                     tooltip: {
                         callbacks: {
                             label: function(context) {
-                                return context.parsed.x.toFixed(2) + ' €';
+                                return Math.round(context.parsed.x) + ' €';
                             }
                         }
                     }
@@ -151,7 +151,7 @@ class ChartsManager {
                         beginAtZero: true,
                         ticks: {
                             callback: function(value) {
-                                return value + ' €';
+                                return Math.round(value) + ' €';
                             }
                         }
                     }
@@ -196,7 +196,7 @@ class ChartsManager {
                                 if (label) {
                                     label += ': ';
                                 }
-                                label += context.parsed.y.toFixed(2) + ' €';
+                                label += Math.round(context.parsed.y) + ' €';
                                 return label;
                             }
                         }
@@ -207,7 +207,7 @@ class ChartsManager {
                         beginAtZero: true,
                         ticks: {
                             callback: function(value) {
-                                return value + ' €';
+                                return Math.round(value) + ' €';
                             }
                         }
                     }

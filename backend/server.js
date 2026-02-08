@@ -251,6 +251,16 @@ app.put('/api/transactions/:id/notes', async (req, res) => {
   }
 });
 
+app.put('/api/transactions/:id/country', async (req, res) => {
+  try {
+    const { country } = req.body;
+    await database.updateTransactionCountry(req.params.id, country || null);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Import transactions from file (auto-detect parser based on account institution)
 app.post('/api/transactions/import-file', async (req, res) => {
   try {
@@ -554,6 +564,24 @@ app.get('/api/reports/country', async (req, res) => {
   }
 });
 
+// Category monthly report (last 12 months)
+app.get('/api/reports/category-monthly', async (req, res) => {
+  try {
+    // Get types from query - can be single value or array
+    let types = req.query.types;
+    if (!types) {
+      types = ['expense'];
+    } else if (!Array.isArray(types)) {
+      types = [types];
+    }
+
+    const report = await database.getCategoryMonthlyReport(types);
+    res.json(report);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get distinct countries for filter
 app.get('/api/countries', async (req, res) => {
   try {
@@ -692,6 +720,17 @@ app.use((err, req, res, next) => {
 
   // Default error
   res.status(500).json({ error: 'Възникна грешка на сървъра. Моля, опитайте отново.' });
+});
+
+// Version endpoint
+app.get('/api/version', (req, res) => {
+  const versionFile = path.join(__dirname, '..', 'VERSION');
+  try {
+    const version = fs.readFileSync(versionFile, 'utf8').trim();
+    res.json({ version });
+  } catch (err) {
+    res.json({ version: 'неизвестна' });
+  }
 });
 
 // Start server

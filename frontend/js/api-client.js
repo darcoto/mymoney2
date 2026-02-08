@@ -90,6 +90,13 @@ class APIClient {
         });
     }
 
+    async updateTransactionCountry(id, country) {
+        return this.request(`/transactions/${id}/country`, {
+            method: 'PUT',
+            body: JSON.stringify({ country })
+        });
+    }
+
     async getTransactionStats(startDate, endDate) {
         const params = new URLSearchParams();
         if (startDate) params.append('start_date', startDate);
@@ -282,6 +289,12 @@ class APIClient {
             params.append('category_id', categoryId);
         }
         return this.request(`/reports/country?${params.toString()}`);
+    }
+
+    async getCategoryMonthlyReport(types = ['expense']) {
+        const params = new URLSearchParams();
+        types.forEach(type => params.append('types', type));
+        return this.request(`/reports/category-monthly?${params.toString()}`);
     }
 }
 
