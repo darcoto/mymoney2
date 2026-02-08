@@ -6,3 +6,4 @@ data/*.db-journal
 .DS_Store
 Thumbs.db
 .claude/settings.local.json
+.serena/
