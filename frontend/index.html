@@ -612,21 +612,21 @@
 
             <div class="card">
                 <div class="card-header">
-                    <h3>GoCardless свързване</h3>
+                    <h3>Доставчици на банкови данни</h3>
                 </div>
                 <div class="card-body">
-                    <div id="authStatus" class="auth-status">
-                        <p>Статус: <span id="connectionStatus" class="status-badge">Проверка...</span></p>
-                    </div>
-                    <p class="text-muted" style="margin: 10px 0;">
-                        GoCardless ви позволява да свързвате банкови сметки и автоматично да импортирате транзакции.
+                    <p class="text-muted" style="margin-bottom: 12px;">
+                        Конфигурирайте доставчици за автоматичен импорт на банкови данни.
                     </p>
+                    <div id="providersList">
+                        <p class="text-muted">Зареждане...</p>
+                    </div>
                 </div>
             </div>
 
             <div class="card">
                 <div class="card-header">
-                    <h3>Банкови връзки (Requisitions)</h3>
+                    <h3>Банкови връзки</h3>
                     <div style="display: flex; gap: 8px;">
                         <button id="addBankBtn" class="btn btn-primary">+ Добави банка</button>
                         <button id="cleanupRequisitionsBtn" class="btn btn-danger" title="Изтрий всички незавършени връзки">🗑️ Изчисти</button>
@@ -682,7 +682,7 @@
                 <div class="card-body">
                     <p><strong>MyMoney<sup>2</sup></strong> - Управление на лични финанси</p>
                     <p>Версия: <span id="appVersion">...</span></p>
-                    <p>Интеграция с GoCardless Bank Account Data API</p>
+                    <p>Интеграция с банкови API доставчици</p>
                     <p style="margin-top: 12px;">
                         <button id="toggleLogsBtn" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px;">
                             📋 Покажи логове

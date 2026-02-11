@@ -16,7 +16,7 @@
   "scripts": {
     "start": "node backend/server.js",
     "dev": "nodemon backend/server.js",
-    "demo": "cross-env USE_DEMO_DB=true node backend/server.js",
+    "demo": "node -e \"process.env.DATABASE_NAME='demo.db'; require('./backend/server')\"",
     "seed-demo": "node backend/seed-demo.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -40,6 +40,7 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "fast-xml-parser": "^4.3.2",
+    "jsonwebtoken": "^9.0.3",
     "open": "^11.0.0",
     "sqlite3": "^5.1.6"
   },

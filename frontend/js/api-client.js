@@ -200,24 +200,54 @@ class APIClient {
         return this.request(`/reports/counterparty?${queryString}`);
     }
 
-    // GoCardless Integration
-    async getInstitutions(country = 'BG') {
-        return this.request(`/gocardless/institutions?country=${country}`);
+    // Provider management
+    async getProviders() {
+        return this.request('/providers');
     }
 
-    async createRequisition(institutionId) {
-        return this.request('/gocardless/requisition', {
+    async getProvider(id) {
+        return this.request(`/providers/${id}`);
+    }
+
+    async updateProviderCredentials(id, credentials) {
+        return this.request(`/providers/${id}/credentials`, {
+            method: 'PUT',
+            body: JSON.stringify({ credentials })
+        });
+    }
+
+    async clearProviderCredentials(id) {
+        return this.request(`/providers/${id}/credentials`, {
+            method: 'DELETE'
+        });
+    }
+
+    async getProviderStatus(id) {
+        return this.request(`/providers/${id}/status`);
+    }
+
+    async getProviderCredentialFields(id) {
+        return this.request(`/providers/${id}/credential-fields`);
+    }
+
+    // Provider banking operations
+    async getInstitutions(providerId, country = 'BG') {
+        return this.request(`/providers/${providerId}/institutions?country=${country}`);
+    }
+
+    async createAuthorization(providerId, institutionId) {
+        return this.request(`/providers/${providerId}/authorizations`, {
             method: 'POST',
             body: JSON.stringify({ institutionId })
         });
     }
 
-    async getRequisitions() {
-        return this.request('/gocardless/requisitions');
+    async getAuthorizations(providerId) {
+        return this.request(`/providers/${providerId}/authorizations`);
     }
 
-    async deleteRequisition(id) {
-        return this.request(`/gocardless/requisitions/${id}`, {
+    async deleteAuthorization(providerId, authId) {
+        return this.request(`/providers/${providerId}/authorizations/${authId}`, {
             method: 'DELETE'
         });
     }

@@ -22,18 +22,30 @@ async function takeScreenshots() {
   await page.setViewport({ width: 1400, height: 900 });
 
   const pages = [
-    { name: 'dashboard', hash: '#dashboard', wait: 2000 },
-    { name: 'transactions', hash: '#transactions', wait: 1500 },
-    { name: 'reports', hash: '#reports', wait: 1500 },
-    { name: 'categories', hash: '#categories', wait: 1000 },
-    { name: 'settings', hash: '#settings', wait: 1000 }
+    { name: 'dashboard',    hash: '#dashboard',    wait: 2500 },
+    { name: 'transactions', hash: '#transactions', wait: 2000 },
+    { name: 'categories',   hash: '#categories',   wait: 1500 },
+    { name: 'reports',      hash: '#reports',      wait: 2500 },
+    { name: 'settings',     hash: '#settings',     wait: 2000 },
+    { name: 'add-bank',     hash: '#settings',     wait: 1000, action: 'addBank' }
   ];
 
   for (const p of pages) {
     try {
       console.log(`Taking screenshot: ${p.name}...`);
       await page.goto(`${BASE_URL}/${p.hash}`, { waitUntil: 'networkidle0' });
-      await delay(p.wait); // Extra wait for data to load
+      await delay(p.wait);
+
+      // Special actions for certain screenshots
+      if (p.action === 'addBank') {
+        // Click the "Add bank" button to open the modal
+        const addBankBtn = await page.$('#addBankBtn');
+        if (addBankBtn) {
+          await addBankBtn.click();
+          await delay(1500);
+        }
+      }
+
       await page.screenshot({
         path: path.join(SCREENSHOT_DIR, `${p.name}.png`),
         fullPage: false

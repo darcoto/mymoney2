@@ -1,16 +1,15 @@
 require('dotenv').config();
 
-const useDemo = process.env.USE_DEMO_DB === 'true';
-const defaultDbPath = useDemo ? './data/demo.db' : './data/finance.db';
+const path = require('path');
+
+// DATABASE_NAME: Име на SQLite файла в папка ./data/
+// Смяната на тази стойност изисква рестарт на сървъра.
+const databaseName = process.env.DATABASE_NAME || 'finance.db';
+const databasePath = path.join('./data', databaseName);
 
 module.exports = {
   port: process.env.PORT || 3000,
-  databasePath: process.env.DATABASE_PATH || defaultDbPath,
-  useDemoDb: useDemo,
-  goCardless: {
-    secretId: process.env.GOCARDLESS_SECRET_ID,
-    secretKey: process.env.GOCARDLESS_SECRET_KEY,
-    apiUrl: 'https://bankaccountdata.gocardless.com'
-  },
+  databaseName,
+  databasePath,
   nodeEnv: process.env.NODE_ENV || 'development'
 };

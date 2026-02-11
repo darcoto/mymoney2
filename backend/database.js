@@ -24,6 +24,8 @@ function getDb() {
     db = new sqlite3.Database(config.databasePath, (err) => {
       if (err) {
         console.error('Error opening database:', err);
+      } else {
+        db.run('PRAGMA foreign_keys = ON');
       }
     });
   }
@@ -102,10 +104,12 @@ async function initialize() {
           CREATE TABLE IF NOT EXISTS accounts (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
+            custom_name TEXT,
             institution_name TEXT,
             iban TEXT,
             currency TEXT DEFAULT 'BGN',
             balance REAL,
+            provider_id INTEGER REFERENCES providers(id),
             last_synced DATETIME,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
           )
@@ -137,6 +141,10 @@ async function initialize() {
             counterparty_name TEXT,
             category_id INTEGER,
             notes TEXT,
+            raw_data TEXT,
+            original_amount REAL,
+            original_currency TEXT,
+            country TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (account_id) REFERENCES accounts(id),
             FOREIGN KEY (category_id) REFERENCES categories(id)
@@ -156,38 +164,36 @@ async function initialize() {
           )
         `);
 
-        // Create gocardless tokens table
+        // Create providers table
         await runQuery(`
-          CREATE TABLE IF NOT EXISTS gocardless_tokens (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            access_token TEXT,
-            refresh_token TEXT,
-            expires_at DATETIME,
+          CREATE TABLE IF NOT EXISTS providers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            description TEXT,
+            website_url TEXT,
+            setup_instructions TEXT,
+            credentials TEXT DEFAULT '{}',
+            is_configured BOOLEAN DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
           )
         `);
 
-        // Migrations - add new columns if they don't exist
-        try {
-          await runQuery('ALTER TABLE accounts ADD COLUMN custom_name TEXT');
-        } catch (e) { /* Column already exists */ }
-
-        try {
-          await runQuery('ALTER TABLE transactions ADD COLUMN raw_data TEXT');
-        } catch (e) { /* Column already exists */ }
-
-        try {
-          await runQuery('ALTER TABLE transactions ADD COLUMN original_amount REAL');
-        } catch (e) { /* Column already exists */ }
-
-        try {
-          await runQuery('ALTER TABLE transactions ADD COLUMN original_currency TEXT');
-        } catch (e) { /* Column already exists */ }
-
-        try {
-          await runQuery('ALTER TABLE transactions ADD COLUMN country TEXT');
-        } catch (e) { /* Column already exists */ }
+        // Create provider_sessions table
+        await runQuery(`
+          CREATE TABLE IF NOT EXISTS provider_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider_id INTEGER NOT NULL,
+            session_type TEXT NOT NULL,
+            session_value TEXT NOT NULL,
+            expires_at DATETIME,
+            metadata TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (provider_id) REFERENCES providers(id)
+          )
+        `);
 
         // Create special "Cash" account for manual transactions if it doesn't exist
         const cashAccount = await getQuery("SELECT id FROM accounts WHERE id = 'CASH'");
@@ -209,6 +215,12 @@ async function initialize() {
           )
         `);
 
+        // Insert default providers if none exist
+        const providersCount = await getQuery('SELECT COUNT(*) as count FROM providers');
+        if (providersCount.count === 0) {
+          await insertDefaultProviders();
+        }
+
         // Insert default categories if none exist
         const categoriesCount = await getQuery('SELECT COUNT(*) as count FROM categories');
         if (categoriesCount.count === 0) {
@@ -221,6 +233,33 @@ async function initialize() {
       }
     });
   });
+}
+
+// Insert default providers (without credentials)
+async function insertDefaultProviders() {
+  const providers = [
+    {
+      type: 'gocardless',
+      name: 'GoCardless',
+      description: 'Достъп до банкови сметки чрез GoCardless Bank Account Data API (бивш Nordigen). Поддържа над 2000 банки в Европа.',
+      website_url: 'https://gocardless.com/bank-account-data/',
+      setup_instructions: '<p>1. Регистрирайте се на <a href="https://bankaccountdata.gocardless.com" target="_blank">GoCardless Bank Account Data</a></p><p>2. Създайте нов секрет (Secret) от User Secrets раздела</p><p>3. Копирайте Secret ID и Secret Key</p>'
+    },
+    {
+      type: 'enablebanking',
+      name: 'Enable Banking',
+      description: 'Достъп до банкови сметки чрез Enable Banking API. Поддържа банки в Европа с PSD2 интеграция.',
+      website_url: 'https://enablebanking.com/',
+      setup_instructions: '<p>1. Регистрирайте се на <a href="https://enablebanking.com" target="_blank">Enable Banking</a></p><p>2. Създайте Application и генерирайте RSA ключ</p><p>3. Копирайте Application ID и Private Key (PEM формат)</p>'
+    }
+  ];
+
+  for (const p of providers) {
+    await runQuery(
+      'INSERT INTO providers (type, name, description, website_url, setup_instructions) VALUES (?, ?, ?, ?, ?)',
+      [p.type, p.name, p.description, p.website_url, p.setup_instructions]
+    );
+  }
 }
 
 // Insert default categories
@@ -292,18 +331,24 @@ async function upsertAccount(account) {
   const existing = await getAccountById(account.id);
 
   if (existing) {
+    // Update provider_id only if provided
+    const providerUpdate = account.providerId !== undefined ? ', provider_id = ?' : '';
+    const params = [account.name, account.institutionName, account.iban,
+       account.currency, account.balance, new Date().toISOString()];
+    if (account.providerId !== undefined) params.push(account.providerId);
+    params.push(account.id);
+
     return await runQuery(
       `UPDATE accounts SET name = ?, institution_name = ?, iban = ?,
-       currency = ?, balance = ?, last_synced = ? WHERE id = ?`,
-      [account.name, account.institutionName, account.iban,
-       account.currency, account.balance, new Date().toISOString(), account.id]
+       currency = ?, balance = ?, last_synced = ?${providerUpdate} WHERE id = ?`,
+      params
     );
   } else {
     return await runQuery(
-      `INSERT INTO accounts (id, name, institution_name, iban, currency, balance, last_synced)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO accounts (id, name, institution_name, iban, currency, balance, last_synced, provider_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [account.id, account.name, account.institutionName, account.iban,
-       account.currency, account.balance, new Date().toISOString()]
+       account.currency, account.balance, new Date().toISOString(), account.providerId || null]
     );
   }
 }
@@ -746,33 +791,6 @@ async function getCategoryBreakdown(startDate, endDate, types = null, categoryId
   return categorized;
 }
 
-// GoCardless token operations
-async function getGoCardlessToken() {
-  return await getQuery('SELECT * FROM gocardless_tokens WHERE id = 1');
-}
-
-async function saveGoCardlessToken(token) {
-  const existing = await getGoCardlessToken();
-
-  if (existing) {
-    return await runQuery(
-      `UPDATE gocardless_tokens SET access_token = ?, refresh_token = ?,
-       expires_at = ?, updated_at = ? WHERE id = 1`,
-      [token.accessToken, token.refreshToken, token.expiresAt, new Date().toISOString()]
-    );
-  } else {
-    return await runQuery(
-      `INSERT INTO gocardless_tokens (id, access_token, refresh_token, expires_at)
-       VALUES (1, ?, ?, ?)`,
-      [token.accessToken, token.refreshToken, token.expiresAt]
-    );
-  }
-}
-
-async function deleteGoCardlessToken() {
-  return await runQuery('DELETE FROM gocardless_tokens WHERE id = 1');
-}
-
 // Counterparty report
 async function getCounterpartyReport(startDate, endDate, types = null, categoryId = null) {
   let query = `
@@ -1109,6 +1127,78 @@ async function getCategoryMonthlyReport(types = ['expense']) {
   };
 }
 
+// Provider operations
+async function getAllProviders() {
+  return await allQuery('SELECT * FROM providers ORDER BY id');
+}
+
+async function getProviderById(id) {
+  return await getQuery('SELECT * FROM providers WHERE id = ?', [id]);
+}
+
+async function getProviderByType(type) {
+  return await getQuery('SELECT * FROM providers WHERE type = ?', [type]);
+}
+
+async function insertProvider(provider) {
+  const result = await runQuery(
+    `INSERT INTO providers (type, name, description, website_url, setup_instructions)
+     VALUES (?, ?, ?, ?, ?)`,
+    [provider.type, provider.name, provider.description, provider.website_url, provider.setup_instructions]
+  );
+  return result.lastID;
+}
+
+async function updateProviderCredentials(id, credentialsJson) {
+  const hasCredentials = credentialsJson && credentialsJson !== '{}';
+  return await runQuery(
+    'UPDATE providers SET credentials = ?, is_configured = ?, updated_at = ? WHERE id = ?',
+    [credentialsJson, hasCredentials ? 1 : 0, new Date().toISOString(), id]
+  );
+}
+
+async function clearProviderCredentials(id) {
+  await runQuery(
+    'UPDATE providers SET credentials = ?, is_configured = 0, updated_at = ? WHERE id = ?',
+    ['{}', new Date().toISOString(), id]
+  );
+  // Also delete sessions for this provider
+  await runQuery('DELETE FROM provider_sessions WHERE provider_id = ?', [id]);
+}
+
+// Provider session operations
+async function getProviderSession(providerId, sessionType) {
+  return await getQuery(
+    'SELECT * FROM provider_sessions WHERE provider_id = ? AND session_type = ?',
+    [providerId, sessionType]
+  );
+}
+
+async function saveProviderSession(providerId, sessionType, sessionValue, expiresAt, metadata) {
+  const existing = await getProviderSession(providerId, sessionType);
+  if (existing) {
+    return await runQuery(
+      `UPDATE provider_sessions SET session_value = ?, expires_at = ?, metadata = ?, updated_at = ?
+       WHERE provider_id = ? AND session_type = ?`,
+      [sessionValue, expiresAt, metadata, new Date().toISOString(), providerId, sessionType]
+    );
+  } else {
+    return await runQuery(
+      `INSERT INTO provider_sessions (provider_id, session_type, session_value, expires_at, metadata)
+       VALUES (?, ?, ?, ?, ?)`,
+      [providerId, sessionType, sessionValue, expiresAt, metadata]
+    );
+  }
+}
+
+async function deleteProviderSessions(providerId) {
+  return await runQuery('DELETE FROM provider_sessions WHERE provider_id = ?', [providerId]);
+}
+
+async function getAccountsByProvider(providerId) {
+  return await allQuery('SELECT * FROM accounts WHERE provider_id = ?', [providerId]);
+}
+
 module.exports = {
   initialize,
   getAllAccounts,
@@ -1136,9 +1226,6 @@ module.exports = {
   getLast12MonthsReport,
   getCategoryBreakdown,
   getCounterpartyReport,
-  getGoCardlessToken,
-  saveGoCardlessToken,
-  deleteGoCardlessToken,
   getAllCounterpartyAliases,
   getCounterpartyAlias,
   createCounterpartyAlias,
@@ -1149,5 +1236,16 @@ module.exports = {
   getAccountsByInstitution,
   getDistinctCountries,
   getCountryReport,
-  getCategoryMonthlyReport
+  getCategoryMonthlyReport,
+  // Provider operations
+  getAllProviders,
+  getProviderById,
+  getProviderByType,
+  insertProvider,
+  updateProviderCredentials,
+  clearProviderCredentials,
+  getProviderSession,
+  saveProviderSession,
+  deleteProviderSessions,
+  getAccountsByProvider
 };

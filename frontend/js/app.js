@@ -1812,25 +1812,16 @@ async function loadSettingsPage() {
     try {
         showLoader();
 
-        // Check auth status
-        const authStatus = await api.getAuthStatus();
-        const statusEl = document.getElementById('connectionStatus');
+        // Load providers
+        const providers = await api.getProviders();
+        await renderProvidersList(providers);
 
-        if (authStatus.connected) {
-            statusEl.textContent = 'Свързан ✓';
-            statusEl.className = 'status-badge connected';
-        } else {
-            statusEl.textContent = 'Несвързан';
-            statusEl.className = 'status-badge disconnected';
-        }
-
-        // Load requisitions
-        const requisitions = await api.getRequisitions();
-        renderRequisitionsList(requisitions);
+        // Load authorizations from all configured providers
+        await loadAllAuthorizations(providers);
 
         // Load accounts
         const accounts = await api.getAccounts();
-        renderAccountsList(accounts);
+        renderAccountsList(accounts, providers);
 
         // Load version
         try {
@@ -1847,51 +1838,181 @@ async function loadSettingsPage() {
     }
 }
 
-// Cleanup requisitions - delete all with status UA (pending) or CR (created)
-async function cleanupRequisitions() {
+// Render providers cards
+async function renderProvidersList(providers) {
+    const container = document.getElementById('providersList');
+    if (!providers || providers.length === 0) {
+        container.innerHTML = '<p class="text-muted">Няма налични доставчици</p>';
+        return;
+    }
+
+    let html = '';
+    for (const provider of providers) {
+        let statusHtml;
+        try {
+            const status = await api.getProviderStatus(provider.id);
+            if (status.configured) {
+                statusHtml = `<span class="badge badge-success">Конфигуриран</span>`;
+                if (status.accountCount > 0) {
+                    statusHtml += ` <span class="badge badge-info">${status.accountCount} сметки</span>`;
+                }
+            } else {
+                statusHtml = `<span class="badge badge-warning">Не е конфигуриран</span>`;
+            }
+        } catch (e) {
+            statusHtml = `<span class="badge badge-danger">Грешка</span>`;
+        }
+
+        html += `
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 8px;">
+                <div style="flex: 1;">
+                    <h4 style="margin: 0 0 4px 0;">${escapeHtml(provider.name)}</h4>
+                    <p style="margin: 2px 0; font-size: 13px; color: var(--text-secondary);">${escapeHtml(provider.description || '')}</p>
+                    <div style="margin-top: 4px;">${statusHtml}</div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    ${provider.website_url ? `<a href="${escapeHtml(provider.website_url)}" target="_blank" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;">Сайт</a>` : ''}
+                    <button class="btn btn-primary" style="padding: 6px 12px; font-size: 12px;" onclick="showProviderCredentialsModal(${provider.id})">
+                        ${provider.is_configured ? 'Промени' : 'Настрой'}
+                    </button>
+                    ${provider.is_configured ? `<button class="btn btn-danger" style="padding: 6px 12px; font-size: 12px;" onclick="clearProviderCredentials(${provider.id})">Изчисти</button>` : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    container.innerHTML = html;
+}
+
+// Show credential configuration modal
+async function showProviderCredentialsModal(providerId) {
     try {
-        const requisitions = await api.getRequisitions();
-
-        // Filter requisitions to delete: UA (Изчаква одобрение), CR (Създадена)
-        const toDelete = requisitions.filter(req => ['UA', 'CR'].includes(req.status));
-
-        if (toDelete.length === 0) {
-            showNotification('Няма връзки за изчистване', 'info');
-            return;
-        }
-
-        if (!confirm(`Сигурни ли сте, че искате да изтриете ${toDelete.length} незавършени банкови връзки?`)) {
-            return;
-        }
-
         showLoader();
-        let deletedCount = 0;
+        const fields = await api.getProviderCredentialFields(providerId);
+        const provider = await api.getProvider(providerId);
+        hideLoader();
 
-        for (const req of toDelete) {
-            try {
-                await api.deleteRequisition(req.id);
-                deletedCount++;
-            } catch (error) {
-                console.error(`Error deleting requisition ${req.id}:`, error);
+        const modal = document.getElementById('modal');
+        document.getElementById('modalTitle').textContent = `Настройка на ${provider.name}`;
+
+        let fieldsHtml = '';
+        if (provider.setup_instructions) {
+            fieldsHtml += `<div style="margin-bottom: 16px; padding: 12px; background: var(--light-bg, #f5f5f5); border-radius: 6px; font-size: 13px;">${provider.setup_instructions}</div>`;
+        }
+
+        for (const field of fields) {
+            if (field.type === 'textarea') {
+                fieldsHtml += `
+                    <div class="filter-group">
+                        <label>${escapeHtml(field.label)}${field.required ? ' *' : ''}</label>
+                        <textarea id="cred_${field.key}" class="input" rows="6"
+                            placeholder="${escapeHtml(field.placeholder || '')}"
+                            style="font-family: monospace; font-size: 12px;"></textarea>
+                    </div>
+                `;
+            } else {
+                fieldsHtml += `
+                    <div class="filter-group">
+                        <label>${escapeHtml(field.label)}${field.required ? ' *' : ''}</label>
+                        <input type="${field.type || 'text'}" id="cred_${field.key}" class="input"
+                            placeholder="${escapeHtml(field.placeholder || '')}">
+                    </div>
+                `;
             }
         }
 
-        hideLoader();
-        showNotification(`Изтрити ${deletedCount} банкови връзки`, 'success');
+        document.getElementById('modalBody').innerHTML = fieldsHtml;
+        modal.classList.add('active');
+        document.getElementById('modalSave').style.display = 'inline-block';
+        document.getElementById('modalSave').textContent = 'Запази';
+        document.getElementById('modalCancel').textContent = 'Отказ';
 
-        // Reload settings page
-        loadSettings();
+        const saveHandler = async () => {
+            const credentials = {};
+            for (const field of fields) {
+                const el = document.getElementById(`cred_${field.key}`);
+                credentials[field.key] = el ? el.value.trim() : '';
+            }
+
+            // Basic validation
+            for (const field of fields) {
+                if (field.required && !credentials[field.key]) {
+                    showNotification(`Полето "${field.label}" е задължително`, 'error');
+                    return;
+                }
+            }
+
+            try {
+                showLoader();
+                await api.updateProviderCredentials(providerId, credentials);
+                modal.classList.remove('active');
+                showNotification('Credentials запазени успешно', 'success');
+                await loadSettingsPage();
+            } catch (error) {
+                showNotification('Грешка: ' + error.message, 'error');
+            } finally {
+                hideLoader();
+            }
+        };
+
+        document.getElementById('modalSave').onclick = saveHandler;
+        document.getElementById('modalCancel').onclick = () => modal.classList.remove('active');
+        document.querySelector('.modal-close').onclick = () => modal.classList.remove('active');
+
     } catch (error) {
         hideLoader();
-        console.error('Error cleaning up requisitions:', error);
-        showNotification('Грешка при изчистване: ' + error.message, 'error');
+        showNotification('Грешка: ' + error.message, 'error');
     }
 }
 
-function renderRequisitionsList(requisitions) {
+window.showProviderCredentialsModal = showProviderCredentialsModal;
+
+// Clear provider credentials
+async function clearProviderCredentials(providerId) {
+    if (!confirm('Сигурни ли сте, че искате да изчистите credentials за този доставчик?')) return;
+
+    try {
+        showLoader();
+        await api.clearProviderCredentials(providerId);
+        showNotification('Credentials изчистени', 'success');
+        await loadSettingsPage();
+    } catch (error) {
+        showNotification('Грешка: ' + error.message, 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+window.clearProviderCredentials = clearProviderCredentials;
+
+// Load all authorizations from configured providers
+async function loadAllAuthorizations(providers) {
+    const container = document.getElementById('requisitionsList');
+    const configuredProviders = providers.filter(p => p.is_configured);
+
+    if (configuredProviders.length === 0) {
+        container.innerHTML = '<p class="text-muted">Няма конфигурирани доставчици. Настройте доставчик по-горе.</p>';
+        return;
+    }
+
+    let allAuths = [];
+    for (const provider of configuredProviders) {
+        try {
+            const auths = await api.getAuthorizations(provider.id);
+            const authsWithProvider = (auths || []).map(a => ({ ...a, providerName: provider.name, providerId: provider.id }));
+            allAuths.push(...authsWithProvider);
+        } catch (e) {
+            console.error(`Error loading authorizations for ${provider.name}:`, e);
+        }
+    }
+
+    renderAuthorizationsList(allAuths);
+}
+
+function renderAuthorizationsList(authorizations) {
     const container = document.getElementById('requisitionsList');
 
-    if (!requisitions || requisitions.length === 0) {
+    if (!authorizations || authorizations.length === 0) {
         container.innerHTML = '<p class="text-muted">Няма банкови връзки. Кликнете "Добави банка" за да свържете банка.</p>';
         return;
     }
@@ -1903,13 +2024,16 @@ function renderRequisitionsList(requisitions) {
         'UA': { text: 'Изчаква одобрение', class: 'badge-warning' },
         'GA': { text: 'Предоставен достъп', class: 'badge-info' },
         'SA': { text: 'Избрани сметки', class: 'badge-info' },
-        'CR': { text: 'Създадена', class: 'badge-warning' }
+        'CR': { text: 'Създадена', class: 'badge-warning' },
+        'ACTIVE': { text: 'Активна', class: 'badge-success' },
+        'EXPIRED': { text: 'Изтекла', class: 'badge-danger' }
     };
 
     container.innerHTML = `
         <table class="table" style="font-size: 13px;">
             <thead>
                 <tr>
+                    <th>Доставчик</th>
                     <th>Банка</th>
                     <th>Статус</th>
                     <th>Сметки</th>
@@ -1918,21 +2042,22 @@ function renderRequisitionsList(requisitions) {
                 </tr>
             </thead>
             <tbody>
-                ${requisitions.map(req => {
-                    const status = statusLabels[req.status] || { text: req.status, class: 'badge-secondary' };
-                    const createdDate = req.created ? new Date(req.created).toLocaleString('bg-BG') : '-';
-                    const isInactive = ['EX', 'RJ'].includes(req.status);
+                ${authorizations.map(auth => {
+                    const status = statusLabels[auth.status] || { text: auth.status, class: 'badge-secondary' };
+                    const createdDate = auth.created ? new Date(auth.created).toLocaleString('bg-BG') : '-';
+                    const isInactive = ['EX', 'RJ', 'EXPIRED'].includes(auth.status);
 
                     return `
                         <tr>
-                            <td>${escapeHtml(req.institution_id || '-')}</td>
+                            <td><span class="badge badge-info" style="font-size: 11px;">${escapeHtml(auth.providerName || '')}</span></td>
+                            <td>${escapeHtml(auth.institution_id || '-')}</td>
                             <td><span class="badge ${status.class}">${status.text}</span></td>
-                            <td>${req.accounts?.length || 0}</td>
+                            <td>${auth.accounts?.length || 0}</td>
                             <td>${createdDate}</td>
                             <td>
                                 ${isInactive ? `
                                     <button class="btn btn-danger" style="padding: 4px 8px; font-size: 11px;"
-                                            onclick="deleteRequisition('${req.id}')">Изтрий</button>
+                                            onclick="deleteProviderAuth(${auth.providerId}, '${auth.id}')">Изтрий</button>
                                 ` : ''}
                             </td>
                         </tr>
@@ -1943,14 +2068,11 @@ function renderRequisitionsList(requisitions) {
     `;
 }
 
-async function deleteRequisition(requisitionId) {
-    if (!confirm('Сигурни ли сте, че искате да изтриете тази банкова връзка?')) {
-        return;
-    }
-
+async function deleteProviderAuth(providerId, authId) {
+    if (!confirm('Сигурни ли сте, че искате да изтриете тази банкова връзка?')) return;
     try {
         showLoader();
-        await api.deleteRequisition(requisitionId);
+        await api.deleteAuthorization(providerId, authId);
         showNotification('Банковата връзка е изтрита', 'success');
         await loadSettingsPage();
     } catch (error) {
@@ -1959,37 +2081,186 @@ async function deleteRequisition(requisitionId) {
         hideLoader();
     }
 }
+window.deleteProviderAuth = deleteProviderAuth;
 
-window.deleteRequisition = deleteRequisition;
+// Cleanup requisitions - delete all with status UA (pending) or CR (created)
+async function cleanupRequisitions() {
+    try {
+        const providers = await api.getProviders();
+        const configuredProviders = providers.filter(p => p.is_configured);
 
-// Add Bank functionality
+        let allToDelete = [];
+        for (const provider of configuredProviders) {
+            try {
+                const auths = await api.getAuthorizations(provider.id);
+                const toDelete = (auths || [])
+                    .filter(req => ['UA', 'CR'].includes(req.status))
+                    .map(req => ({ ...req, providerId: provider.id }));
+                allToDelete.push(...toDelete);
+            } catch (e) { /* skip */ }
+        }
+
+        if (allToDelete.length === 0) {
+            showNotification('Няма връзки за изчистване', 'info');
+            return;
+        }
+
+        if (!confirm(`Сигурни ли сте, че искате да изтриете ${allToDelete.length} незавършени банкови връзки?`)) {
+            return;
+        }
+
+        showLoader();
+        let deletedCount = 0;
+
+        for (const req of allToDelete) {
+            try {
+                await api.deleteAuthorization(req.providerId, req.id);
+                deletedCount++;
+            } catch (error) {
+                console.error(`Error deleting authorization ${req.id}:`, error);
+            }
+        }
+
+        hideLoader();
+        showNotification(`Изтрити ${deletedCount} банкови връзки`, 'success');
+        await loadSettingsPage();
+    } catch (error) {
+        hideLoader();
+        console.error('Error cleaning up requisitions:', error);
+        showNotification('Грешка при изчистване: ' + error.message, 'error');
+    }
+}
+
+// Add Bank functionality - multi-step: provider → country → bank
+let addBankState = {};
+
 async function showAddBankModal() {
     try {
         showLoader();
-
-        // Load institutions (banks)
-        const institutions = await api.getInstitutions('BG');
-
+        const providers = await api.getProviders();
+        const configuredProviders = providers.filter(p => p.is_configured);
         hideLoader();
 
+        if (configuredProviders.length === 0) {
+            showNotification('Няма конфигурирани доставчици. Настройте доставчик от секция "Доставчици".', 'error');
+            return;
+        }
+
+        // If only one provider, skip selection step
+        if (configuredProviders.length === 1) {
+            addBankState.providerId = configuredProviders[0].id;
+            addBankState.providerName = configuredProviders[0].name;
+            await showAddBankCountryStep();
+            return;
+        }
+
+        // Step 1: Provider selection
         const modal = document.getElementById('modal');
-        document.getElementById('modalTitle').textContent = 'Добави банкова сметка';
+        document.getElementById('modalTitle').textContent = 'Добави банка — Избор на доставчик';
 
-        // Filter Bulgarian banks and popular international ones
-        const bulgarianBanks = institutions.filter(inst => inst.countries.includes('BG'));
+        const providersHtml = configuredProviders.map(p => `
+            <div class="bank-option" style="
+                padding: 12px;
+                border: 1px solid var(--border-color);
+                border-radius: 6px;
+                cursor: pointer;
+                margin-bottom: 8px;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                transition: all 0.2s;
+            " onmouseover="this.style.backgroundColor='var(--light-bg)'"
+               onmouseout="this.style.backgroundColor='white'"
+               onclick="selectProvider(${p.id}, '${escapeHtml(p.name).replace(/'/g, "\\'")}')">
+                <div style="flex: 1;">
+                    <strong>${escapeHtml(p.name)}</strong>
+                    <div style="font-size: 12px; color: var(--text-secondary);">${escapeHtml(p.description || '')}</div>
+                </div>
+            </div>
+        `).join('');
 
-        // Sort: Bulgarian banks first, then alphabetically
-        bulgarianBanks.sort((a, b) => {
-            const bgOnlyA = inst => inst.countries.length === 1 && inst.countries[0] === 'BG';
-            const bgOnlyB = inst => inst.countries.length === 1 && inst.countries[0] === 'BG';
+        document.getElementById('modalBody').innerHTML = `
+            <div style="max-height: 400px; overflow-y: auto;">
+                <p style="margin-bottom: 12px; color: var(--text-secondary);">
+                    Изберете доставчик:
+                </p>
+                ${providersHtml}
+            </div>
+        `;
 
-            if (bgOnlyA(a) && !bgOnlyB(b)) return -1;
-            if (!bgOnlyA(a) && bgOnlyB(b)) return 1;
-            return a.name.localeCompare(b.name);
-        });
+        modal.classList.add('active');
+        document.getElementById('modalSave').style.display = 'none';
+        document.getElementById('modalCancel').textContent = 'Затвори';
+        document.getElementById('modalCancel').onclick = () => modal.classList.remove('active');
+        document.querySelector('.modal-close').onclick = () => modal.classList.remove('active');
 
-        const banksHtml = bulgarianBanks.map(inst => `
-            <div class="bank-option" data-institution-id="${inst.id}" style="
+    } catch (error) {
+        hideLoader();
+        console.error('Error loading providers:', error);
+        showNotification('Грешка: ' + error.message, 'error');
+    }
+}
+
+async function selectProvider(providerId, providerName) {
+    addBankState.providerId = providerId;
+    addBankState.providerName = providerName;
+    await showAddBankCountryStep();
+}
+window.selectProvider = selectProvider;
+
+async function showAddBankCountryStep() {
+    const modal = document.getElementById('modal');
+    document.getElementById('modalTitle').textContent = `Добави банка — ${addBankState.providerName}`;
+
+    document.getElementById('modalBody').innerHTML = `
+        <div class="filter-group">
+            <label>Държава</label>
+            <select id="bankCountrySelect" class="input" onchange="loadBanksList()">
+                <option value="BG">България</option>
+                <option value="DE">Германия</option>
+                <option value="AT">Австрия</option>
+                <option value="NL">Нидерландия</option>
+                <option value="FR">Франция</option>
+                <option value="IT">Италия</option>
+                <option value="ES">Испания</option>
+                <option value="GB">Великобритания</option>
+                <option value="RO">Румъния</option>
+                <option value="GR">Гърция</option>
+                <option value="PT">Португалия</option>
+            </select>
+        </div>
+        <div id="banksList" style="max-height: 350px; overflow-y: auto;">
+            <p class="text-muted">Зареждане на банки...</p>
+        </div>
+    `;
+
+    modal.classList.add('active');
+    document.getElementById('modalSave').style.display = 'none';
+    document.getElementById('modalCancel').textContent = 'Затвори';
+    document.getElementById('modalCancel').onclick = () => modal.classList.remove('active');
+    document.querySelector('.modal-close').onclick = () => modal.classList.remove('active');
+
+    await loadBanksList();
+}
+
+async function loadBanksList() {
+    const country = document.getElementById('bankCountrySelect')?.value || 'BG';
+    const container = document.getElementById('banksList');
+    container.innerHTML = '<p class="text-muted">Зареждане...</p>';
+
+    try {
+        const institutions = await api.getInstitutions(addBankState.providerId, country);
+
+        if (!institutions || institutions.length === 0) {
+            container.innerHTML = '<p class="text-muted">Няма налични банки за тази държава</p>';
+            return;
+        }
+
+        // Sort alphabetically
+        institutions.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+        container.innerHTML = institutions.map(inst => `
+            <div class="bank-option" style="
                 padding: 12px;
                 border: 1px solid var(--border-color);
                 border-radius: 6px;
@@ -2002,46 +2273,27 @@ async function showAddBankModal() {
             " onmouseover="this.style.backgroundColor='var(--light-bg)'"
                onmouseout="this.style.backgroundColor='white'"
                onclick="selectBank('${inst.id}')">
-                ${inst.logo ? `<img src="${inst.logo}" alt="${inst.name}" style="width: 32px; height: 32px; object-fit: contain;">` : '🏦'}
+                ${inst.logo ? `<img src="${inst.logo}" alt="${inst.name}" style="width: 32px; height: 32px; object-fit: contain;">` : ''}
                 <div style="flex: 1;">
                     <strong>${escapeHtml(inst.name)}</strong>
-                    <div style="font-size: 12px; color: var(--text-secondary);">
-                        История: ${inst.transaction_total_days} дни | Достъп: ${inst.max_access_valid_for_days} дни
-                    </div>
+                    ${inst.transaction_total_days ? `<div style="font-size: 12px; color: var(--text-secondary);">
+                        История: ${inst.transaction_total_days} дни${inst.max_access_valid_for_days ? ` | Достъп: ${inst.max_access_valid_for_days} дни` : ''}
+                    </div>` : ''}
                 </div>
             </div>
         `).join('');
-
-        document.getElementById('modalBody').innerHTML = `
-            <div style="max-height: 400px; overflow-y: auto;">
-                <p style="margin-bottom: 12px; color: var(--text-secondary);">
-                    Изберете вашата банка за да свържете сметка:
-                </p>
-                ${banksHtml}
-            </div>
-        `;
-
-        modal.classList.add('active');
-
-        // Hide default buttons
-        document.getElementById('modalSave').style.display = 'none';
-        document.getElementById('modalCancel').textContent = 'Затвори';
-        document.getElementById('modalCancel').onclick = () => modal.classList.remove('active');
-        document.querySelector('.modal-close').onclick = () => modal.classList.remove('active');
-
     } catch (error) {
-        hideLoader();
-        console.error('Error loading banks:', error);
-        showNotification('Грешка при зареждане на банки: ' + error.message, 'error');
+        container.innerHTML = `<p style="color: var(--danger-color);">Грешка при зареждане: ${escapeHtml(error.message)}</p>`;
     }
 }
+window.loadBanksList = loadBanksList;
 
 // Select and connect to bank
 async function selectBank(institutionId) {
     try {
         showLoader();
 
-        const result = await api.createRequisition(institutionId);
+        const result = await api.createAuthorization(addBankState.providerId, institutionId);
 
         hideLoader();
 
@@ -2056,9 +2308,7 @@ async function selectBank(institutionId) {
         );
 
         if (confirmed && result.link) {
-            // Open bank authorization in new window
             window.open(result.link, '_blank');
-
             showNotification(
                 'След като одобрите достъпа в банката, върнете се тук и кликнете "Синхронизирай сметки"',
                 'info'
@@ -2067,7 +2317,7 @@ async function selectBank(institutionId) {
 
     } catch (error) {
         hideLoader();
-        console.error('Error creating requisition:', error);
+        console.error('Error creating authorization:', error);
         showNotification('Грешка при свързване с банка: ' + error.message, 'error');
     }
 }
@@ -2186,12 +2436,18 @@ async function applyCategories() {
     }
 }
 
-function renderAccountsList(accounts) {
+function renderAccountsList(accounts, providers) {
     const container = document.getElementById('accountsList');
 
     if (accounts.length === 0) {
         container.innerHTML = '<p class="text-muted">Няма свързани сметки</p>';
         return;
+    }
+
+    // Build provider name map
+    const providerMap = {};
+    if (providers) {
+        providers.forEach(p => { providerMap[p.id] = p.name; });
     }
 
     container.innerHTML = '';
@@ -2200,6 +2456,8 @@ function renderAccountsList(accounts) {
         const lastSyncedText = account.last_synced
             ? new Date(account.last_synced).toLocaleString('bg-BG')
             : 'Никога';
+        const providerName = providerMap[account.provider_id] || '';
+        const providerBadge = providerName ? `<span class="badge badge-info" style="font-size: 10px; padding: 2px 6px;">${escapeHtml(providerName)}</span>` : '';
 
         const div = document.createElement('div');
         div.className = 'account-item';
@@ -2208,6 +2466,7 @@ function renderAccountsList(accounts) {
             <div class="account-info" style="flex: 1;">
                 <h4 style="margin: 0 0 4px 0; display: flex; align-items: center; gap: 8px;">
                     ${escapeHtml(displayName)}
+                    ${providerBadge}
                     <button class="btn btn-secondary" style="padding: 2px 8px; font-size: 11px;" onclick="editAccountName('${account.id}', '${escapeHtml(displayName).replace(/'/g, "\\'")}')">✏️</button>
                 </h4>
                 <p style="margin: 2px 0; font-size: 13px; color: var(--text-secondary);">${escapeHtml(account.institution_name || '')} - ${escapeHtml(account.iban || '')}</p>

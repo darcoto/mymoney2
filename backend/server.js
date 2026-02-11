@@ -6,10 +6,19 @@ const config = require('./config');
 const database = require('./database');
 const logger = require('./logger');
 
-const categorization = require('./categorization');
-const xmlImport = require('./xml-import');
-const revolutImport = require('./revolut-import');
 const countryUtils = require('./country-codes');
+const providerRegistry = require('./providers/provider-registry');
+const GoCardlessProvider = require('./providers/gocardless-provider');
+const EnableBankingProvider = require('./providers/enablebanking-provider');
+
+// Route modules
+const providersRouter = require('./routes/providers');
+const syncRouter = require('./routes/sync');
+const accountsRouter = require('./routes/accounts');
+const transactionsRouter = require('./routes/transactions');
+const { categoryRouter, rulesRouter } = require('./routes/categories');
+const reportsRouter = require('./routes/reports');
+const { apiError } = require('./routes/helpers');
 
 const app = express();
 
@@ -21,6 +30,10 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Serve static files from frontend
 app.use(express.static(path.join(__dirname, '../frontend')));
 
+// Register provider classes
+providerRegistry.registerProvider('gocardless', GoCardlessProvider);
+providerRegistry.registerProvider('enablebanking', EnableBankingProvider);
+
 // Initialize database
 database.initialize()
   .then(() => {
@@ -31,573 +44,48 @@ database.initialize()
     process.exit(1);
   });
 
-// Health check endpoint
+// Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Auth routes
+// Auth status (checks if any provider is configured)
 app.get('/api/auth/status', async (req, res) => {
   try {
-    const token = await database.getGoCardlessToken();
+    const providers = await database.getAllProviders();
+    const configured = providers.filter(p => p.is_configured);
     res.json({
-      connected: !!token && !!token.access_token,
-      expiresAt: token?.expires_at
+      connected: configured.length > 0,
+      configuredProviders: configured.length
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    apiError(res, error);
   }
 });
 
-// GoCardless routes
-const goCardlessApi = require('./gocardless-api');
+// Mount route modules
+app.use('/api/providers', providersRouter);
+app.use('/api/sync', syncRouter);
+app.use('/api/accounts', accountsRouter);
+app.use('/api/transactions', transactionsRouter);
+app.use('/api/categories', categoryRouter);
+app.use('/api/categorization-rules', rulesRouter);
+app.use('/api/reports', reportsRouter);
 
-app.get('/api/gocardless/institutions', async (req, res) => {
-  try {
-    const country = req.query.country || 'BG';
-    const institutions = await goCardlessApi.getInstitutions(country);
-    res.json(institutions);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/gocardless/requisition', async (req, res) => {
-  try {
-    const { institutionId } = req.body;
-    const requisition = await goCardlessApi.createRequisition(institutionId);
-    res.json(requisition);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/gocardless/requisitions', async (req, res) => {
-  try {
-    const requisitions = await goCardlessApi.listRequisitions();
-    res.json(requisitions);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/gocardless/requisitions/:id', async (req, res) => {
-  try {
-    const requisition = await goCardlessApi.getRequisition(req.params.id);
-    res.json(requisition);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/gocardless/requisitions/:id', async (req, res) => {
-  try {
-    await goCardlessApi.deleteRequisition(req.params.id);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/sync/accounts', async (req, res) => {
-  try {
-    const accounts = await goCardlessApi.syncAllAccounts();
-    res.json({ success: true, accounts, count: accounts.length });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/sync/transactions', async (req, res) => {
-  try {
-    const accounts = await database.getAllAccounts();
-    let totalSynced = 0;
-    const byAccount = [];
-
-    for (const account of accounts) {
-      // Skip CASH account - it's for manual transactions only
-      if (account.id === 'CASH') continue;
-
-      try {
-        const count = await goCardlessApi.syncAccountTransactions(account.id);
-        totalSynced += count;
-        byAccount.push({
-          accountId: account.id,
-          accountName: account.custom_name || account.name,
-          institutionName: account.institution_name,
-          count: count
-        });
-      } catch (error) {
-        console.error(`Error syncing account ${account.id}:`, error.message);
-        byAccount.push({
-          accountId: account.id,
-          accountName: account.custom_name || account.name,
-          institutionName: account.institution_name,
-          count: 0,
-          error: error.message
-        });
-      }
-    }
-
-    res.json({ success: true, transactionsSynced: totalSynced, byAccount });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Account routes
-app.get('/api/accounts', async (req, res) => {
-  try {
-    const accounts = await database.getAllAccounts();
-    res.json(accounts);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/accounts/:id', async (req, res) => {
-  try {
-    const account = await database.getAccountById(req.params.id);
-    if (!account) {
-      return res.status(404).json({ error: 'Account not found' });
-    }
-    res.json(account);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/accounts/:id/name', async (req, res) => {
-  try {
-    const { customName } = req.body;
-    await database.updateAccountCustomName(req.params.id, customName);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Transaction routes
-app.get('/api/transactions', async (req, res) => {
-  try {
-    const filters = {
-      accountId: req.query.account_id,
-      startDate: req.query.start_date,
-      endDate: req.query.end_date,
-      categoryId: req.query.category_id,
-      type: req.query.type,
-      search: req.query.search,
-      country: req.query.country,
-      limit: parseInt(req.query.limit) || 50,
-      offset: parseInt(req.query.offset) || 0
-    };
-    const result = await database.getTransactions(filters);
-    // Return object with transactions array and total count
-    res.json(result);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/transactions', async (req, res) => {
-  try {
-    const { transactionDate, amount, counterpartyName, description, categoryId } = req.body;
-
-    if (!transactionDate || amount === undefined) {
-      return res.status(400).json({ error: 'Дата и сума са задължителни' });
-    }
-
-    const result = await database.createManualTransaction({
-      transactionDate,
-      amount: parseFloat(amount),
-      counterpartyName: counterpartyName || null,
-      description: description || null,
-      categoryId: categoryId ? parseInt(categoryId) : null
-    });
-
-    res.status(201).json({ success: true, id: result.lastID });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/transactions/:id/category', async (req, res) => {
-  try {
-    const { categoryId } = req.body;
-    await database.updateTransactionCategory(req.params.id, categoryId);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/transactions/categorize-by-counterparty', async (req, res) => {
-  try {
-    const { counterpartyName, categoryId } = req.body;
-    const count = await database.categorizeByCounterparty(counterpartyName, categoryId);
-    res.json({ success: true, updatedCount: count });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/transactions/:id/notes', async (req, res) => {
-  try {
-    const { notes } = req.body;
-    await database.updateTransactionNotes(req.params.id, notes);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/transactions/:id/country', async (req, res) => {
-  try {
-    const { country } = req.body;
-    await database.updateTransactionCountry(req.params.id, country || null);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Import transactions from file (auto-detect parser based on account institution)
-app.post('/api/transactions/import-file', async (req, res) => {
-  try {
-    const { fileContent, accountId, currency } = req.body;
-
-    // Validate input
-    if (!fileContent) {
-      return res.status(400).json({ error: 'Съдържанието на файла е задължително' });
-    }
-    if (!accountId) {
-      return res.status(400).json({ error: 'Сметката е задължителна' });
-    }
-
-    // Verify account exists and get institution info
-    const account = await database.getAccountById(accountId);
-    if (!account) {
-      return res.status(404).json({ error: 'Сметката не е намерена' });
-    }
-
-    const institutionName = (account.institution_name || '').toUpperCase();
-    let transactions = [];
-    let parserName = '';
-
-    // Determine parser based on institution name
-    if (institutionName.includes('DSK')) {
-      // DSK Bank - XML parser
-      parserName = 'DSK Bank (XML)';
-      transactions = xmlImport.processXmlForImport(fileContent, accountId, currency || 'BGN');
-    } else if (institutionName.includes('REVOLUT')) {
-      // Revolut - CSV parser
-      parserName = 'Revolut (CSV)';
-      transactions = revolutImport.processCsvForImport(fileContent, accountId);
-    } else {
-      return res.status(400).json({
-        error: `Не се поддържа импорт за банка "${account.institution_name}". Поддържани банки: DSK Bank, Revolut`
-      });
-    }
-
-    logger.info(`[File Import] Using parser: ${parserName} for account ${accountId}`);
-
-    if (transactions.length === 0) {
-      return res.json({
-        success: true,
-        imported: 0,
-        skipped: 0,
-        categorized: 0,
-        errors: [],
-        total: 0,
-        parser: parserName,
-        message: 'Няма намерени транзакции във файла'
-      });
-    }
-
-    // Apply categorization rules and counterparty history before import
-    let categorizedCount = 0;
-    for (const tx of transactions) {
-      // First try categorization rules
-      let categoryId = await categorization.categorizeTransaction({
-        description: tx.description,
-        counterpartyName: tx.counterpartyName
-      });
-
-      // If no rule matched, try to find category from previous transactions with same counterparty
-      if (!categoryId && tx.counterpartyName) {
-        categoryId = await database.getCategoryByCounterparty(tx.counterpartyName);
-      }
-
-      if (categoryId) {
-        tx.categoryId = categoryId;
-        categorizedCount++;
-      }
-    }
-
-    // Import transactions in batch
-    const results = await database.importTransactionsBatch(transactions);
-
-    logger.info(`[File Import] ${parserName}: Imported ${results.imported}, skipped ${results.skipped}, categorized ${categorizedCount}, errors: ${results.errors.length}`);
-
-    res.json({
-      success: true,
-      imported: results.imported,
-      skipped: results.skipped,
-      categorized: categorizedCount,
-      errors: results.errors,
-      total: transactions.length,
-      parser: parserName
-    });
-  } catch (error) {
-    logger.error(`[File Import] Error: ${error.message}`);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get accounts by institution name pattern
-app.get('/api/accounts/by-institution/:pattern', async (req, res) => {
-  try {
-    const accounts = await database.getAccountsByInstitution(req.params.pattern);
-    res.json(accounts);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/transactions/stats', async (req, res) => {
-  try {
-    const { start_date, end_date } = req.query;
-    const stats = await database.getTransactionStats(start_date, end_date);
-    res.json(stats);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Category routes
-app.get('/api/categories', async (req, res) => {
-  try {
-    const categories = await database.getAllCategories();
-    res.json(categories);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/categories', async (req, res) => {
-  try {
-    const { name, type, color, icon, parentId } = req.body;
-    const id = await database.createCategory({ name, type, color, icon, parentId });
-    res.status(201).json({ id, success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/categories/:id', async (req, res) => {
-  try {
-    const { name, type, color, icon, parentId } = req.body;
-    await database.updateCategory(req.params.id, { name, type, color, icon, parentId });
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/categories/:id', async (req, res) => {
-  try {
-    await database.deleteCategory(req.params.id);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Categorization rules routes
-app.get('/api/categorization-rules', async (req, res) => {
-  try {
-    const rules = await database.getAllCategorizationRules();
-    res.json(rules);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/categorization-rules', async (req, res) => {
-  try {
-    const { pattern, categoryId, priority } = req.body;
-    const id = await database.createCategorizationRule({ pattern, categoryId, priority });
-    res.status(201).json({ id, success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/categorization-rules/:id', async (req, res) => {
-  try {
-    const { pattern, categoryId, priority, active } = req.body;
-    await database.updateCategorizationRule(req.params.id, { pattern, categoryId, priority, active });
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/categorization-rules/:id', async (req, res) => {
-  try {
-    await database.deleteCategorizationRule(req.params.id);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/categorization-rules/apply', async (req, res) => {
-  try {
-    // Apply categorization rules
-    const result = await categorization.applyRulesToUncategorized();
-
-    // Extract countries from transactions without country
-    const transactionsWithoutCountry = await database.getTransactionsWithoutCountry();
-    let countriesExtracted = 0;
-
-    for (const tx of transactionsWithoutCountry) {
-      const country = countryUtils.extractCountryFromCounterparty(tx.counterparty_name);
-      if (country) {
-        await database.updateTransactionCountry(tx.id, country);
-        countriesExtracted++;
-      }
-    }
-
-    res.json({
-      success: true,
-      ...result,
-      countriesExtracted,
-      totalWithoutCountry: transactionsWithoutCountry.length
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Reports routes
-app.get('/api/reports/monthly', async (req, res) => {
-  try {
-    const { year, month, category_id } = req.query;
-
-    // Get types from query - can be single value or array
-    let types = req.query.types;
-    if (!types) {
-      types = null; // All types
-    } else if (!Array.isArray(types)) {
-      types = [types];
-    }
-
-    const report = await database.getMonthlyReport(year, month, types, category_id);
-    res.json(report);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/reports/last-12-months', async (req, res) => {
-  try {
-    const report = await database.getLast12MonthsReport();
-    res.json(report);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/reports/category-breakdown', async (req, res) => {
-  try {
-    const { start_date, end_date, type } = req.query;
-    // Convert single type to array for compatibility
-    const types = type ? [type] : null;
-    const breakdown = await database.getCategoryBreakdown(start_date, end_date, types);
-    res.json(breakdown);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/reports/counterparty', async (req, res) => {
-  try {
-    const { start_date, end_date } = req.query;
-    const report = await database.getCounterpartyReport(start_date, end_date);
-    res.json(report);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Country report
-app.get('/api/reports/country', async (req, res) => {
-  try {
-    // Get types from query - can be single value or array
-    let types = req.query.types;
-    if (!types) {
-      types = ['expense'];
-    } else if (!Array.isArray(types)) {
-      types = [types];
-    }
-
-    // Get category filter
-    const categoryId = req.query.category_id || null;
-
-    const report = await database.getCountryReport(types, categoryId);
-    // Add country info (name, flag) to each country
-    const enrichedCountries = report.countries.map(country => {
-      const info = countryUtils.getCountryInfo(country.code);
-      return {
-        ...country,
-        name: info?.name || country.code,
-        flag: info?.flag || ''
-      };
-    });
-    res.json({
-      years: report.years,
-      countries: enrichedCountries
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Category monthly report (last 12 months)
-app.get('/api/reports/category-monthly', async (req, res) => {
-  try {
-    // Get types from query - can be single value or array
-    let types = req.query.types;
-    if (!types) {
-      types = ['expense'];
-    } else if (!Array.isArray(types)) {
-      types = [types];
-    }
-
-    const report = await database.getCategoryMonthlyReport(types);
-    res.json(report);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get distinct countries for filter
+// Countries
 app.get('/api/countries', async (req, res) => {
   try {
     const countries = await database.getDistinctCountries();
-    // Add country info (name, flag) to each
     const enrichedCountries = countries.map(row => ({
       code: row.country,
       ...countryUtils.getCountryInfo(row.country)
     }));
     res.json(enrichedCountries);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    apiError(res, error);
   }
 });
 
-// Get country info by code
 app.get('/api/countries/:code', async (req, res) => {
   try {
     const info = countryUtils.getCountryInfo(req.params.code);
@@ -606,17 +94,17 @@ app.get('/api/countries/:code', async (req, res) => {
     }
     res.json({ code: req.params.code, ...info });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    apiError(res, error);
   }
 });
 
-// Counterparty aliases routes
+// Counterparty aliases
 app.get('/api/counterparty-aliases', async (req, res) => {
   try {
     const aliases = await database.getAllCounterpartyAliases();
     res.json(aliases);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    apiError(res, error);
   }
 });
 
@@ -626,7 +114,7 @@ app.post('/api/counterparty-aliases', async (req, res) => {
     const id = await database.createCounterpartyAlias(originalName, displayName);
     res.status(201).json({ id, success: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    apiError(res, error);
   }
 });
 
@@ -636,7 +124,7 @@ app.put('/api/counterparty-aliases/:id', async (req, res) => {
     await database.updateCounterpartyAlias(req.params.id, displayName);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    apiError(res, error);
   }
 });
 
@@ -645,37 +133,40 @@ app.delete('/api/counterparty-aliases/:id', async (req, res) => {
     await database.deleteCounterpartyAlias(req.params.id);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    apiError(res, error);
   }
 });
 
-// Logs route
+// Logs
 app.get('/api/logs', async (req, res) => {
   try {
     const lines = parseInt(req.query.lines) || 100;
     const logs = logger.getRecentLogs(lines);
     res.json({ logs });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    apiError(res, error);
   }
 });
 
-// Backup route
+// Backup
 app.post('/api/backup', async (req, res) => {
   try {
     const dbPath = config.databasePath || './data/finance.db';
+    const backupDir = path.join(path.dirname(dbPath), 'backups');
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir, { recursive: true });
+    }
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
     const hours = String(now.getHours()).padStart(2, '0');
     const minutes = String(now.getMinutes()).padStart(2, '0');
-    const backupPath = dbPath.replace('.db', `_backup_${dateStr}_${hours}${minutes}.db`);
+    const dbName = path.basename(dbPath, '.db');
+    const backupPath = path.join(backupDir, `${dbName}_backup_${dateStr}_${hours}${minutes}.db`);
 
-    // Check if source exists
     if (!fs.existsSync(dbPath)) {
       return res.status(404).json({ error: 'Database file not found' });
     }
 
-    // Copy the database file
     fs.copyFileSync(dbPath, backupPath);
 
     res.json({
@@ -684,7 +175,18 @@ app.post('/api/backup', async (req, res) => {
       message: `Backup created: ${path.basename(backupPath)}`
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    apiError(res, error);
+  }
+});
+
+// Version
+app.get('/api/version', (req, res) => {
+  const versionFile = path.join(__dirname, '..', 'VERSION');
+  try {
+    const version = fs.readFileSync(versionFile, 'utf8').trim();
+    res.json({ version });
+  } catch (err) {
+    res.json({ version: 'неизвестна' });
   }
 });
 
@@ -695,9 +197,8 @@ app.get('*', (req, res) => {
 
 // Error handler
 app.use((err, req, res, next) => {
-  console.error('Server error:', err);
+  logger.error('Server error:', err);
 
-  // Handle specific error types with user-friendly messages
   if (err.type === 'entity.too.large') {
     const limitMB = Math.round(err.limit / 1024 / 1024);
     const sizeMB = (err.length / 1024 / 1024).toFixed(2);
@@ -718,23 +219,12 @@ app.use((err, req, res, next) => {
     });
   }
 
-  // Default error
   res.status(500).json({ error: 'Възникна грешка на сървъра. Моля, опитайте отново.' });
-});
-
-// Version endpoint
-app.get('/api/version', (req, res) => {
-  const versionFile = path.join(__dirname, '..', 'VERSION');
-  try {
-    const version = fs.readFileSync(versionFile, 'utf8').trim();
-    res.json({ version });
-  } catch (err) {
-    res.json({ version: 'неизвестна' });
-  }
 });
 
 // Start server
 app.listen(config.port, () => {
   console.log(`MyMoney2 server running on http://localhost:${config.port}`);
+  console.log(`Database: ${config.databaseName} (${config.databasePath})`);
   console.log(`Environment: ${config.nodeEnv}`);
 });

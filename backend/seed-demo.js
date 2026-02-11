@@ -1,6 +1,6 @@
 /**
  * Seed script for demo database
- * Creates sample data: 2 banks, 3 accounts, 50 transactions
+ * Creates sample data: 3 banks, 5 accounts, 50 transactions, providers
  *
  * Usage: node backend/seed-demo.js
  */
@@ -25,7 +25,6 @@ if (fs.existsSync(DEMO_DB_PATH)) {
 
 const db = new sqlite3.Database(DEMO_DB_PATH);
 
-// Helper to run queries as promises
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.run(sql, params, function(err) {
@@ -35,234 +34,355 @@ function run(sql, params = []) {
   });
 }
 
-// Sample data
+// ── Data ──────────────────────────────────────────────
+
 const banks = [
-  { id: 'BANK_UNICREDIT', name: 'УниКредит Булбанк', logo: 'unicredit.png' },
-  { id: 'BANK_DSK', name: 'Банка ДСК', logo: 'dsk.png' }
+  { id: 'BANK_UNICREDIT', name: 'УниКредит Булбанк' },
+  { id: 'BANK_DSK',       name: 'Банка ДСК' },
+  { id: 'BANK_REVOLUT',   name: 'Revolut' }
 ];
 
 const accounts = [
-  { id: 'ACC_UNI_BGN', bankId: 'BANK_UNICREDIT', name: 'Разплащателна сметка BGN', customName: 'Основна сметка', iban: 'BG80UNCR12345678901234', currency: 'BGN', balance: 5420.50 },
-  { id: 'ACC_UNI_EUR', bankId: 'BANK_UNICREDIT', name: 'Разплащателна сметка EUR', customName: 'Евро сметка', iban: 'BG90UNCR12345678905678', currency: 'EUR', balance: 1250.00 },
-  { id: 'ACC_DSK_BGN', bankId: 'BANK_DSK', name: 'Спестовна сметка', customName: 'Спестявания', iban: 'BG70STSA12345678909012', currency: 'BGN', balance: 12350.75 }
+  { id: 'ACC_UNI_BGN', bankIdx: 0, name: 'Разплащателна BGN',  customName: 'Основна сметка',  iban: 'BG80UNCR76101012345678', currency: 'EUR', balance: 2734.18 },
+  { id: 'ACC_UNI_EUR', bankIdx: 0, name: 'Разплащателна EUR',  customName: 'Евро сметка',      iban: 'BG90UNCR76101098765432', currency: 'EUR', balance: 1580.00 },
+  { id: 'ACC_DSK_BGN', bankIdx: 1, name: 'Спестовна сметка',   customName: 'Спестявания ДСК',  iban: 'BG70STSA93001234567890', currency: 'EUR', balance: 8920.45 },
+  { id: 'ACC_DSK_SAV', bankIdx: 1, name: 'Депозит 12м',        customName: 'Депозит',           iban: 'BG71STSA93009876543210', currency: 'EUR', balance: 15000.00 },
+  { id: 'ACC_REV_EUR', bankIdx: 2, name: 'Revolut EUR',        customName: 'Revolut',           iban: 'LT60REVOLT1234567890', currency: 'EUR', balance: 423.67 }
 ];
 
 const categories = [
-  { name: 'Храна и напитки', type: 'expense', color: '#FF6384', icon: 'utensils' },
-  { name: 'Транспорт', type: 'expense', color: '#36A2EB', icon: 'car' },
-  { name: 'Комунални услуги', type: 'expense', color: '#FFCE56', icon: 'home' },
-  { name: 'Здраве', type: 'expense', color: '#4BC0C0', icon: 'heartbeat' },
-  { name: 'Забавления', type: 'expense', color: '#9966FF', icon: 'film' },
-  { name: 'Пазаруване', type: 'expense', color: '#FF9F40', icon: 'shopping-bag' },
-  { name: 'Заплата', type: 'income', color: '#4CAF50', icon: 'briefcase' },
-  { name: 'Други приходи', type: 'income', color: '#8BC34A', icon: 'plus-circle' },
-  { name: 'Вътрешен превод', type: 'transfer', color: '#9E9E9E', icon: 'exchange-alt' }
+  // Expenses (id 1-11)
+  { name: 'Храна и напитки',    type: 'expense',  color: '#FF6384', icon: 'utensils' },
+  { name: 'Транспорт',          type: 'expense',  color: '#36A2EB', icon: 'car' },
+  { name: 'Комунални услуги',   type: 'expense',  color: '#FFCE56', icon: 'home' },
+  { name: 'Здраве',             type: 'expense',  color: '#4BC0C0', icon: 'heartbeat' },
+  { name: 'Забавления',         type: 'expense',  color: '#9966FF', icon: 'film' },
+  { name: 'Облекло',            type: 'expense',  color: '#FF9F40', icon: 'tshirt' },
+  { name: 'Образование',        type: 'expense',  color: '#E74C3C', icon: 'graduation-cap' },
+  { name: 'Домакинство',        type: 'expense',  color: '#3498DB', icon: 'couch' },
+  { name: 'Телекомуникации',    type: 'expense',  color: '#F39C12', icon: 'mobile' },
+  { name: 'Застраховки',        type: 'expense',  color: '#1ABC9C', icon: 'shield-alt' },
+  { name: 'Други разходи',      type: 'expense',  color: '#C9CBCF', icon: 'ellipsis-h' },
+  // Income (id 12-16)
+  { name: 'Заплата',            type: 'income',   color: '#4CAF50', icon: 'money-bill-wave' },
+  { name: 'Фрийланс',          type: 'income',   color: '#8BC34A', icon: 'laptop' },
+  { name: 'Инвестиции',         type: 'income',   color: '#CDDC39', icon: 'chart-line' },
+  { name: 'Подарък',            type: 'income',   color: '#FFEB3B', icon: 'gift' },
+  { name: 'Други приходи',      type: 'income',   color: '#FFC107', icon: 'plus-circle' },
+  // Transfers (id 17-18)
+  { name: 'Между сметки',       type: 'transfer', color: '#9E9E9E', icon: 'exchange-alt' },
+  { name: 'Спестявания',        type: 'transfer', color: '#607D8B', icon: 'piggy-bank' }
 ];
 
-const counterparties = {
-  expense: [
-    'ЛИДЛ БЪЛГАРИЯ', 'БИЛЛА', 'КАУФЛАНД', 'ФАНТАСТИКО',
-    'SHELL БЪЛГАРИЯ', 'ОМВ', 'ЛУКОЙЛ',
-    'СОФИЙСКА ВОДА', 'ЧЕЗ ЕЛЕКТРО', 'ТОПЛОФИКАЦИЯ',
-    'АПТЕКИ МАРЕШКИ', 'СОФИЯМЕД',
-    'КИНО АРЕНА', 'NETFLIX', 'SPOTIFY',
-    'ЗАРА', 'H&M', 'ДЕКАТЛОН', 'ТЕХНОМАРКЕТ', 'ЕМАГ'
-  ],
-  income: [
-    'РАБОТОДАТЕЛ ООД', 'КЛИЕНТ ЕООД', 'ФРИЙЛАНС ПРОЕКТ'
-  ]
-};
+// Counterparties mapped to category indices (0-based → +1 for DB id)
+const merchants = [
+  // Храна и напитки (cat 1)
+  { name: 'ЛИДЛ БЪЛГАРИЯ ЕООД',    catIdx: 0, min: -8,   max: -120 },
+  { name: 'КАУФЛАНД БЪЛГАРИЯ',     catIdx: 0, min: -15,  max: -180 },
+  { name: 'БИЛЛА БЪЛГАРИЯ',        catIdx: 0, min: -5,   max: -85 },
+  { name: 'ФАНТАСТИКО ООД',        catIdx: 0, min: -10,  max: -95 },
+  { name: 'WOLT BG',               catIdx: 0, min: -12,  max: -45 },
+  { name: 'HAPPY BAR & GRILL',     catIdx: 0, min: -20,  max: -75 },
+  // Транспорт (cat 2)
+  { name: 'SHELL БЪЛГАРИЯ',        catIdx: 1, min: -40,  max: -130 },
+  { name: 'ОМВ БЪЛГАРИЯ ООД',      catIdx: 1, min: -35,  max: -120 },
+  { name: 'ЦЕНТЪР ЗА ГРАДСКА МОБИЛНОСТ', catIdx: 1, min: -1.60, max: -50 },
+  // Комунални (cat 3)
+  { name: 'СОФИЙСКА ВОДА АД',      catIdx: 2, min: -15,  max: -45 },
+  { name: 'ЧЕЗ ЕЛЕКТРО БЪЛГАРИЯ',  catIdx: 2, min: -40,  max: -130 },
+  { name: 'ТОПЛОФИКАЦИЯ СОФИЯ',    catIdx: 2, min: -50,  max: -250 },
+  // Здраве (cat 4)
+  { name: 'АПТЕКИ МАРЕШКИ',        catIdx: 3, min: -5,   max: -60 },
+  { name: 'МЦ СОФИЯМЕД',           catIdx: 3, min: -30,  max: -120 },
+  // Забавления (cat 5)
+  { name: 'КИНО АРЕНА ООД',        catIdx: 4, min: -12,  max: -35 },
+  { name: 'NETFLIX.COM',           catIdx: 4, min: -18,  max: -18 },
+  { name: 'SPOTIFY AB',            catIdx: 4, min: -15,  max: -15 },
+  // Облекло (cat 6)
+  { name: 'ЗАРА БЪЛГАРИЯ',         catIdx: 5, min: -25,  max: -150 },
+  { name: 'H&M HENNES & MAURITZ',  catIdx: 5, min: -20,  max: -100 },
+  // Домакинство (cat 8)
+  { name: 'ИКЕА БЪЛГАРИЯ',         catIdx: 7, min: -30,  max: -300 },
+  { name: 'MR. BRICOLAGE',         catIdx: 7, min: -10,  max: -80 },
+  // Телеком (cat 9)
+  { name: 'A1 БЪЛГАРИЯ ЕАД',       catIdx: 8, min: -25,  max: -55 },
+  { name: 'YETTEL БЪЛГАРИЯ',       catIdx: 8, min: -20,  max: -45 },
+  // Други разходи (cat 11)
+  { name: 'ЕМАГ.БГ',               catIdx: 10, min: -15, max: -250 },
+  { name: 'ТЕХНОМАРКЕТ БЪЛГАРИЯ',   catIdx: 10, min: -20, max: -400 },
+  { name: 'ДЕКАТЛОН БЪЛГАРИЯ',      catIdx: 10, min: -15, max: -120 }
+];
 
-// Generate random date in the last 6 months
-function randomDate() {
-  const now = new Date();
-  const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, 1);
-  const diff = now.getTime() - sixMonthsAgo.getTime();
-  const randomTime = sixMonthsAgo.getTime() + Math.random() * diff;
-  return new Date(randomTime).toISOString().split('T')[0];
+const incomeCounterparties = [
+  { name: 'ДИГИТАЛ СОЛЮШЪНС ООД',  catIdx: 11, min: 2800, max: 3500, desc: 'Заплата м.' },
+  { name: 'УЕБКРАФТ ЕООД',         catIdx: 12, min: 500,  max: 2000, desc: 'Фрийланс проект' },
+  { name: 'МАРИЯ ИВАНОВА',          catIdx: 14, min: 50,   max: 200,  desc: 'Подарък рожден ден' }
+];
+
+// Deterministic random for reproducibility
+let rngState = 42;
+function rand() {
+  rngState = (rngState * 1103515245 + 12345) & 0x7fffffff;
+  return rngState / 0x7fffffff;
 }
 
-// Generate transactions
-function generateTransactions(count) {
-  const transactions = [];
+function randRange(min, max) {
+  return min + rand() * (max - min);
+}
 
-  for (let i = 0; i < count; i++) {
-    const isIncome = Math.random() < 0.2; // 20% income, 80% expense
-    const account = accounts[Math.floor(Math.random() * accounts.length)];
-    const date = randomDate();
+function randInt(min, max) {
+  return Math.floor(randRange(min, max + 1));
+}
 
-    let amount, counterparty, categoryIndex;
+function pick(arr) {
+  return arr[randInt(0, arr.length - 1)];
+}
 
-    if (isIncome) {
-      amount = Math.round((Math.random() * 3000 + 500) * 100) / 100; // 500-3500
-      counterparty = counterparties.income[Math.floor(Math.random() * counterparties.income.length)];
-      categoryIndex = 6 + Math.floor(Math.random() * 2); // Income categories (index 6-7)
-    } else {
-      amount = -Math.round((Math.random() * 200 + 5) * 100) / 100; // -5 to -205
-      counterparty = counterparties.expense[Math.floor(Math.random() * counterparties.expense.length)];
-      categoryIndex = Math.floor(Math.random() * 6); // Expense categories (index 0-5)
-    }
+function randomDate(monthsBack) {
+  const now = new Date();
+  const from = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1);
+  const diff = now.getTime() - from.getTime();
+  return new Date(from.getTime() + rand() * diff).toISOString().split('T')[0];
+}
 
-    transactions.push({
-      id: `TX_${Date.now()}_${i}_${Math.random().toString(36).substr(2, 6)}`,
-      accountId: account.id,
-      date: date,
-      amount: amount,
-      currency: account.currency,
-      counterparty: counterparty,
-      description: `Транзакция ${counterparty}`,
-      categoryId: categoryIndex + 1 // 1-based
+function roundAmount(v) {
+  return Math.round(v * 100) / 100;
+}
+
+function generateTransactions() {
+  const txs = [];
+
+  // ── 10 income transactions ──
+  for (let i = 0; i < 10; i++) {
+    const cp = pick(incomeCounterparties);
+    const acc = i < 7 ? accounts[0] : accounts[2]; // mostly main account
+    const date = randomDate(6);
+    txs.push({
+      id: `TX_INC_${i}`,
+      accountId: acc.id,
+      date,
+      amount: roundAmount(randRange(cp.min, cp.max)),
+      counterparty: cp.name,
+      description: cp.desc || `Приход от ${cp.name}`,
+      categoryId: cp.catIdx + 1
     });
   }
 
-  // Sort by date descending
-  transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+  // ── 40 expense transactions ──
+  for (let i = 0; i < 40; i++) {
+    const m = pick(merchants);
+    const acc = pick(accounts.slice(0, 3)); // first 3 accounts get transactions
+    const date = randomDate(6);
+    const amount = roundAmount(randRange(m.min, m.max));
+    txs.push({
+      id: `TX_EXP_${i}`,
+      accountId: acc.id,
+      date,
+      amount,
+      counterparty: m.name,
+      description: `Плащане ${m.name}`,
+      categoryId: m.catIdx + 1
+    });
+  }
 
-  return transactions;
+  txs.sort((a, b) => b.date.localeCompare(a.date));
+  return txs;
 }
+
+// ── Main ──────────────────────────────────────────────
 
 async function seed() {
   console.log('Creating demo database...\n');
 
   try {
-    // Create tables
-    await run(`
-      CREATE TABLE IF NOT EXISTS accounts (
-        id TEXT PRIMARY KEY,
-        name TEXT,
-        custom_name TEXT,
-        institution_id TEXT,
-        institution_name TEXT,
-        iban TEXT,
-        currency TEXT DEFAULT 'BGN',
-        balance REAL,
-        last_synced DATETIME,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    // ── Tables ──
 
-    await run(`
-      CREATE TABLE IF NOT EXISTS categories (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE,
-        type TEXT CHECK(type IN ('income', 'expense', 'transfer')),
-        color TEXT,
-        icon TEXT,
-        parent_id INTEGER,
-        FOREIGN KEY (parent_id) REFERENCES categories(id)
-      )
-    `);
+    await run(`CREATE TABLE IF NOT EXISTS accounts (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      custom_name TEXT,
+      institution_name TEXT,
+      iban TEXT,
+      currency TEXT DEFAULT 'BGN',
+      balance REAL,
+      provider_id INTEGER,
+      last_synced DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
 
-    await run(`
-      CREATE TABLE IF NOT EXISTS transactions (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        transaction_date DATE NOT NULL,
-        booking_date DATE,
-        amount REAL NOT NULL,
-        currency TEXT DEFAULT 'BGN',
-        description TEXT,
-        counterparty_name TEXT,
-        category_id INTEGER,
-        notes TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        raw_data TEXT,
-        original_amount REAL,
-        original_currency TEXT,
-        FOREIGN KEY (account_id) REFERENCES accounts(id),
-        FOREIGN KEY (category_id) REFERENCES categories(id)
-      )
-    `);
+    await run(`CREATE TABLE IF NOT EXISTS categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      type TEXT CHECK(type IN ('income', 'expense', 'transfer')),
+      color TEXT,
+      icon TEXT,
+      parent_id INTEGER,
+      FOREIGN KEY (parent_id) REFERENCES categories(id)
+    )`);
 
-    await run(`
-      CREATE TABLE IF NOT EXISTS categorization_rules (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        pattern TEXT NOT NULL,
-        category_id INTEGER NOT NULL,
-        priority INTEGER DEFAULT 0,
-        active BOOLEAN DEFAULT 1,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (category_id) REFERENCES categories(id)
-      )
-    `);
+    await run(`CREATE TABLE IF NOT EXISTS transactions (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      transaction_date DATE NOT NULL,
+      booking_date DATE,
+      amount REAL NOT NULL,
+      currency TEXT DEFAULT 'BGN',
+      description TEXT,
+      counterparty_name TEXT,
+      category_id INTEGER,
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      raw_data TEXT,
+      original_amount REAL,
+      original_currency TEXT,
+      country TEXT,
+      FOREIGN KEY (account_id) REFERENCES accounts(id),
+      FOREIGN KEY (category_id) REFERENCES categories(id)
+    )`);
 
-    await run(`
-      CREATE TABLE IF NOT EXISTS gocardless_tokens (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        access_token TEXT,
-        refresh_token TEXT,
-        expires_at DATETIME,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    await run(`CREATE TABLE IF NOT EXISTS categorization_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pattern TEXT NOT NULL,
+      category_id INTEGER NOT NULL,
+      priority INTEGER DEFAULT 0,
+      active BOOLEAN DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (category_id) REFERENCES categories(id)
+    )`);
 
-    await run(`
-      CREATE TABLE IF NOT EXISTS counterparty_aliases (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        original_name TEXT NOT NULL UNIQUE,
-        display_name TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    await run(`CREATE TABLE IF NOT EXISTS providers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      description TEXT,
+      website_url TEXT,
+      setup_instructions TEXT,
+      credentials TEXT DEFAULT '{}',
+      is_configured BOOLEAN DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
 
-    // Insert CASH account
-    await run(`
-      INSERT INTO accounts (id, name, custom_name, institution_name, currency, balance)
-      VALUES ('CASH', 'Кеш', 'Кеш', 'Ръчни транзакции', 'EUR', 0)
-    `);
-    console.log('Created CASH account');
+    await run(`CREATE TABLE IF NOT EXISTS provider_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider_id INTEGER NOT NULL,
+      session_type TEXT NOT NULL,
+      session_value TEXT NOT NULL,
+      expires_at DATETIME,
+      metadata TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (provider_id) REFERENCES providers(id)
+    )`);
 
-    // Insert accounts (2 banks, 3 accounts)
+    await run(`CREATE TABLE IF NOT EXISTS counterparty_aliases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      original_name TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    console.log('Tables created');
+
+    // ── Providers (without credentials) ──
+
+    await run(`INSERT INTO providers (type, name, description, website_url, setup_instructions)
+      VALUES (?, ?, ?, ?, ?)`, [
+      'gocardless', 'GoCardless',
+      'Достъп до банкови сметки чрез GoCardless Bank Account Data API (бивш Nordigen). Поддържа над 2000 банки в Европа.',
+      'https://gocardless.com/bank-account-data/',
+      '<p>1. Регистрирайте се на <a href="https://bankaccountdata.gocardless.com" target="_blank">GoCardless</a></p><p>2. Създайте Secret</p><p>3. Копирайте Secret ID и Secret Key</p>'
+    ]);
+
+    await run(`INSERT INTO providers (type, name, description, website_url, setup_instructions)
+      VALUES (?, ?, ?, ?, ?)`, [
+      'enablebanking', 'Enable Banking',
+      'Достъп до банкови сметки чрез Enable Banking API. Поддържа банки в Европа с PSD2 интеграция.',
+      'https://enablebanking.com/',
+      '<p>1. Регистрирайте се на <a href="https://enablebanking.com" target="_blank">Enable Banking</a></p><p>2. Създайте Application и генерирайте RSA ключ</p><p>3. Копирайте Application ID и Private Key</p>'
+    ]);
+
+    console.log('Providers seeded (GoCardless + Enable Banking, without credentials)');
+
+    // ── CASH account ──
+
+    await run(`INSERT INTO accounts (id, name, custom_name, institution_name, currency, balance)
+      VALUES ('CASH', 'Кеш', 'Кеш', 'Ръчни транзакции', 'EUR', 0)`);
+
+    // ── Bank accounts ──
+
     for (const acc of accounts) {
-      const bank = banks.find(b => b.id === acc.bankId);
+      const bank = banks[acc.bankIdx];
       await run(
-        `INSERT INTO accounts (id, name, custom_name, institution_id, institution_name, iban, currency, balance, last_synced)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-        [acc.id, acc.name, acc.customName, acc.bankId, bank.name, acc.iban, acc.currency, acc.balance]
+        `INSERT INTO accounts (id, name, custom_name, institution_name, iban, currency, balance, last_synced)
+         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [acc.id, acc.name, acc.customName, bank.name, acc.iban, acc.currency, acc.balance]
       );
     }
-    console.log(`Created ${accounts.length} accounts from ${banks.length} banks`);
+    console.log(`Created ${accounts.length} accounts from ${banks.length} banks + CASH`);
 
-    // Insert categories
+    // ── Categories ──
+
     for (const cat of categories) {
-      await run(
-        'INSERT INTO categories (name, type, color, icon) VALUES (?, ?, ?, ?)',
-        [cat.name, cat.type, cat.color, cat.icon]
-      );
+      await run('INSERT INTO categories (name, type, color, icon) VALUES (?, ?, ?, ?)',
+        [cat.name, cat.type, cat.color, cat.icon]);
     }
     console.log(`Created ${categories.length} categories`);
 
-    // Insert transactions
-    const transactions = generateTransactions(50);
+    // ── Transactions ──
+
+    const transactions = generateTransactions();
     for (const tx of transactions) {
       await run(
         `INSERT INTO transactions (id, account_id, transaction_date, booking_date, amount, currency, description, counterparty_name, category_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [tx.id, tx.accountId, tx.date, tx.date, tx.amount, tx.currency, tx.description, tx.counterparty, tx.categoryId]
+        [tx.id, tx.accountId, tx.date, tx.date, tx.amount, 'EUR', tx.description, tx.counterparty, tx.categoryId]
       );
     }
     console.log(`Created ${transactions.length} transactions`);
 
-    // Insert some categorization rules
+    // ── Categorization rules ──
+
     const rules = [
-      { pattern: 'ЛИДЛ|БИЛЛА|КАУФЛАНД|ФАНТАСТИКО', categoryId: 1, priority: 10 },
-      { pattern: 'SHELL|ОМВ|ЛУКОЙЛ', categoryId: 2, priority: 10 },
-      { pattern: 'СОФИЙСКА ВОДА|ЧЕЗ|ТОПЛОФИКАЦИЯ', categoryId: 3, priority: 10 },
-      { pattern: 'РАБОТОДАТЕЛ|ЗАПЛАТА', categoryId: 7, priority: 10 }
+      { pattern: 'ЛИДЛ|БИЛЛА|КАУФЛАНД|ФАНТАСТИКО|WOLT|HAPPY BAR', categoryId: 1, priority: 10 },
+      { pattern: 'SHELL|ОМВ|ГРАДСКА МОБИЛНОСТ',                    categoryId: 2, priority: 10 },
+      { pattern: 'СОФИЙСКА ВОДА|ЧЕЗ|ТОПЛОФИКАЦИЯ',                 categoryId: 3, priority: 10 },
+      { pattern: 'АПТЕКИ|СОФИЯМЕД',                                 categoryId: 4, priority: 10 },
+      { pattern: 'КИНО АРЕНА|NETFLIX|SPOTIFY',                      categoryId: 5, priority: 10 },
+      { pattern: 'ЗАРА|H&M',                                        categoryId: 6, priority: 10 },
+      { pattern: 'ИКЕА|BRICOLAGE',                                  categoryId: 8, priority: 10 },
+      { pattern: 'A1 БЪЛГАРИЯ|YETTEL',                               categoryId: 9, priority: 10 },
+      { pattern: 'ДИГИТАЛ СОЛЮШЪНС|ЗАПЛАТА',                        categoryId: 12, priority: 10 }
     ];
 
     for (const rule of rules) {
-      await run(
-        'INSERT INTO categorization_rules (pattern, category_id, priority) VALUES (?, ?, ?)',
-        [rule.pattern, rule.categoryId, rule.priority]
-      );
+      await run('INSERT INTO categorization_rules (pattern, category_id, priority) VALUES (?, ?, ?)',
+        [rule.pattern, rule.categoryId, rule.priority]);
     }
     console.log(`Created ${rules.length} categorization rules`);
 
+    // ── Counterparty aliases ──
+
+    const aliases = [
+      { original: 'ЛИДЛ БЪЛГАРИЯ ЕООД',    display: 'Лидл' },
+      { original: 'КАУФЛАНД БЪЛГАРИЯ',      display: 'Кауфланд' },
+      { original: 'БИЛЛА БЪЛГАРИЯ',          display: 'Билла' },
+      { original: 'ЧЕЗ ЕЛЕКТРО БЪЛГАРИЯ',   display: 'ЧЕЗ' },
+      { original: 'ДИГИТАЛ СОЛЮШЪНС ООД',   display: 'Заплата' }
+    ];
+
+    for (const a of aliases) {
+      await run('INSERT INTO counterparty_aliases (original_name, display_name) VALUES (?, ?)',
+        [a.original, a.display]);
+    }
+    console.log(`Created ${aliases.length} counterparty aliases`);
+
+    // ── Done ──
+
     console.log('\nDemo database created successfully!');
     console.log(`Path: ${DEMO_DB_PATH}`);
-    console.log('\nTo use it, set USE_DEMO_DB=true in your .env file');
+    console.log('\nTo use: set DATABASE_NAME=demo.db in .env and restart,');
+    console.log('or run: npm run demo');
 
   } catch (err) {
     console.error('Error creating demo database:', err);

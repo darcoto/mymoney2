@@ -1,56 +1,64 @@
 const database = require('./database');
 const logger = require('./logger');
 
+// Cached rules (call loadRules() to populate, cleared after use)
+let cachedRules = null;
+
 /**
- * Automatically categorize a transaction based on rules
- * @param {Object} transaction - Transaction object with description and counterpartyName
- * @returns {Number|null} - Category ID or null if no match
+ * Load and cache active categorization rules sorted by priority.
+ * Call once before a batch of categorizeTransaction() calls, then clearRulesCache().
+ */
+async function loadRules() {
+  const rules = await database.getAllCategorizationRules();
+  cachedRules = rules.filter(rule => rule.active).sort((a, b) => b.priority - a.priority);
+  return cachedRules;
+}
+
+function clearRulesCache() {
+  cachedRules = null;
+}
+
+/**
+ * Match a transaction against a set of rules (pure logic, no DB call).
+ */
+function matchRules(transaction, rules) {
+  const searchText = [
+    transaction.description || '',
+    transaction.counterpartyName || transaction.counterparty_name || ''
+  ].join(' ').toUpperCase();
+
+  for (const rule of rules) {
+    const patterns = rule.pattern.toUpperCase().split('|');
+    for (const p of patterns) {
+      const trimmed = p.trim();
+      if (trimmed && searchText.includes(trimmed)) {
+        return rule.category_id;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Automatically categorize a transaction based on rules.
+ * Uses cached rules if available, otherwise loads from DB.
  */
 async function categorizeTransaction(transaction) {
   try {
-    // Get all active categorization rules
-    const rules = await database.getAllCategorizationRules();
-
-    // Filter only active rules
-    const activeRules = rules.filter(rule => rule.active);
-
-    // Sort by priority (highest first)
-    activeRules.sort((a, b) => b.priority - a.priority);
-
-    // Build search text from description and counterparty
-    const searchText = [
-      transaction.description || '',
-      transaction.counterpartyName || ''
-    ].join(' ').toUpperCase();
-
-    // Try to match each rule
-    for (const rule of activeRules) {
-      const pattern = rule.pattern.toUpperCase();
-      const patterns = pattern.split('|'); // Support OR patterns
-
-      for (const p of patterns) {
-        const trimmedPattern = p.trim();
-        if (trimmedPattern && searchText.includes(trimmedPattern)) {
-          return rule.category_id;
-        }
-      }
-    }
-
-    // No match found
-    return null;
+    const rules = cachedRules || await loadRules();
+    return matchRules(transaction, rules);
   } catch (error) {
-    console.error('Error categorizing transaction:', error.message);
+    logger.error('Error categorizing transaction:', error.message);
     return null;
   }
 }
 
 /**
  * Apply categorization rules to all uncategorized transactions
- * @returns {Object} - { totalUncategorized, categorizedCount }
  */
 async function applyRulesToUncategorized() {
   try {
-    // Get all uncategorized transactions (no pagination limit)
+    const rules = await loadRules();
     const result = await database.getTransactions({ categoryId: 'uncategorized', limit: 10000 });
     const transactions = result.transactions || result;
 
@@ -58,12 +66,12 @@ async function applyRulesToUncategorized() {
     let categorizedCount = 0;
 
     for (const transaction of transactions) {
-      // First try categorization rules
-      let categoryId = await categorizeTransaction(transaction);
+      let categoryId = matchRules(transaction, rules);
 
-      // If no rule matched, try to get category from previous transaction with same counterparty
-      if (!categoryId && transaction.counterparty_name) {
-        categoryId = await database.getCategoryByCounterparty(transaction.counterparty_name);
+      if (!categoryId && (transaction.counterparty_name || transaction.counterpartyName)) {
+        categoryId = await database.getCategoryByCounterparty(
+          transaction.counterparty_name || transaction.counterpartyName
+        );
       }
 
       if (categoryId) {
@@ -72,22 +80,21 @@ async function applyRulesToUncategorized() {
       }
     }
 
+    clearRulesCache();
     return { totalUncategorized, categorizedCount };
   } catch (error) {
-    console.error('Error applying rules to uncategorized transactions:', error.message);
+    clearRulesCache();
+    logger.error('Error applying rules to uncategorized transactions:', error.message);
     throw error;
   }
 }
 
 /**
  * Get categorization suggestions for a transaction
- * @param {Object} transaction - Transaction object
- * @returns {Array} - Array of suggested categories with confidence scores
  */
 async function getSuggestions(transaction) {
   try {
-    const rules = await database.getAllCategorizationRules();
-    const activeRules = rules.filter(rule => rule.active);
+    const rules = cachedRules || await loadRules();
 
     const searchText = [
       transaction.description || '',
@@ -96,30 +103,26 @@ async function getSuggestions(transaction) {
 
     const suggestions = [];
 
-    for (const rule of activeRules) {
-      const pattern = rule.pattern.toUpperCase();
-      const patterns = pattern.split('|');
-
+    for (const rule of rules) {
+      const patterns = rule.pattern.toUpperCase().split('|');
       for (const p of patterns) {
-        const trimmedPattern = p.trim();
-        if (trimmedPattern && searchText.includes(trimmedPattern)) {
+        const trimmed = p.trim();
+        if (trimmed && searchText.includes(trimmed)) {
           suggestions.push({
             categoryId: rule.category_id,
             categoryName: rule.category_name,
             color: rule.category_color,
-            confidence: rule.priority / 10.0, // Normalize priority to 0-1 range
-            matchedPattern: trimmedPattern
+            confidence: rule.priority / 10.0,
+            matchedPattern: trimmed
           });
         }
       }
     }
 
-    // Sort by confidence (priority)
     suggestions.sort((a, b) => b.confidence - a.confidence);
-
     return suggestions;
   } catch (error) {
-    console.error('Error getting categorization suggestions:', error.message);
+    logger.error('Error getting categorization suggestions:', error.message);
     return [];
   }
 }
@@ -127,5 +130,7 @@ async function getSuggestions(transaction) {
 module.exports = {
   categorizeTransaction,
   applyRulesToUncategorized,
-  getSuggestions
+  getSuggestions,
+  loadRules,
+  clearRulesCache
 };
