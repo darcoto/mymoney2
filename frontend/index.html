@@ -316,10 +316,12 @@
             <div class="card" style="margin-bottom: 20px;">
                 <div class="card-body" style="padding: 12px;">
                     <div style="display: flex; gap: 12px;">
-                        <button class="btn btn-primary report-tab active" data-report="monthly">📊 Месечен отчет</button>
+                        <button class="btn btn-primary report-tab active" data-report="monthly">📁 По категории</button>
+                        <button class="btn btn-secondary report-tab" data-report="counterparty">👤 По контрагенти</button>
+                        <button class="btn btn-secondary report-tab" data-report="account">🏦 По сметки</button>
                         <button class="btn btn-secondary report-tab" data-report="yearly">📅 По месеци</button>
                         <button class="btn btn-secondary report-tab" data-report="country">🌍 По държави</button>
-                        <button class="btn btn-secondary report-tab" data-report="category">📁 По категории</button>
+                        <button class="btn btn-secondary report-tab" data-report="category">📊 12 месеца</button>
                     </div>
                 </div>
             </div>
@@ -377,27 +379,6 @@
                 </div>
 
                 <div id="reportResults" style="display: none;">
-                    <div class="summary-cards">
-                        <div class="card summary-card">
-                            <div class="card-content">
-                                <h3>Общо приходи</h3>
-                                <p class="amount positive" id="reportIncome">0.00 €</p>
-                            </div>
-                        </div>
-                        <div class="card summary-card">
-                            <div class="card-content">
-                                <h3>Общо разходи</h3>
-                                <p class="amount negative" id="reportExpenses">0.00 €</p>
-                            </div>
-                        </div>
-                        <div class="card summary-card">
-                            <div class="card-content">
-                                <h3>Баланс</h3>
-                                <p class="amount" id="reportBalance">0.00 €</p>
-                            </div>
-                        </div>
-                    </div>
-
                     <div class="card">
                         <div class="card-header">
                             <h3>Разбивка по категории</h3>
@@ -420,7 +401,61 @@
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
 
+            <!-- Counterparty Report Section -->
+            <div id="counterpartyReportSection" style="display: none;">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="filters-grid">
+                            <div class="filter-group">
+                                <label>Година</label>
+                                <select id="counterpartyReportYear" class="input"></select>
+                            </div>
+                            <div class="filter-group">
+                                <label>Месец</label>
+                                <select id="counterpartyReportMonth" class="input">
+                                    <option value="1">Януари</option>
+                                    <option value="2">Февруари</option>
+                                    <option value="3">Март</option>
+                                    <option value="4">Април</option>
+                                    <option value="5">Май</option>
+                                    <option value="6">Юни</option>
+                                    <option value="7">Юли</option>
+                                    <option value="8">Август</option>
+                                    <option value="9">Септември</option>
+                                    <option value="10">Октомври</option>
+                                    <option value="11">Ноември</option>
+                                    <option value="12">Декември</option>
+                                </select>
+                            </div>
+                            <div class="filter-group filter-actions">
+                                <button id="generateCounterpartyReport" class="btn btn-primary">Генерирай</button>
+                            </div>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee;">
+                            <span style="font-weight: 500;">Тип:</span>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                <input type="checkbox" id="counterpartyFilterExpense" checked style="width: 16px; height: 16px;">
+                                <span>💸 Разходи</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                <input type="checkbox" id="counterpartyFilterIncome" checked style="width: 16px; height: 16px;">
+                                <span>💰 Приходи</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                <input type="checkbox" id="counterpartyFilterTransfer" style="width: 16px; height: 16px;">
+                                <span>🔄 Трансфери</span>
+                            </label>
+                            <span style="margin-left: 16px; font-weight: 500;">Категория:</span>
+                            <select id="counterpartyFilterCategory" class="input" style="width: 200px;">
+                                <option value="">Всички категории</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div id="counterpartyReportResults" style="display: none;">
                     <div class="card">
                         <div class="card-header">
                             <h3>По контрагенти</h3>
@@ -443,7 +478,61 @@
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
 
+            <!-- Account Report Section -->
+            <div id="accountReportSection" style="display: none;">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="filters-grid">
+                            <div class="filter-group">
+                                <label>Година</label>
+                                <select id="accountReportYear" class="input"></select>
+                            </div>
+                            <div class="filter-group">
+                                <label>Месец</label>
+                                <select id="accountReportMonth" class="input">
+                                    <option value="1">Януари</option>
+                                    <option value="2">Февруари</option>
+                                    <option value="3">Март</option>
+                                    <option value="4">Април</option>
+                                    <option value="5">Май</option>
+                                    <option value="6">Юни</option>
+                                    <option value="7">Юли</option>
+                                    <option value="8">Август</option>
+                                    <option value="9">Септември</option>
+                                    <option value="10">Октомври</option>
+                                    <option value="11">Ноември</option>
+                                    <option value="12">Декември</option>
+                                </select>
+                            </div>
+                            <div class="filter-group filter-actions">
+                                <button id="generateAccountReport" class="btn btn-primary">Генерирай</button>
+                            </div>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee;">
+                            <span style="font-weight: 500;">Тип:</span>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                <input type="checkbox" id="accountFilterExpense" checked style="width: 16px; height: 16px;">
+                                <span>💸 Разходи</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                <input type="checkbox" id="accountFilterIncome" checked style="width: 16px; height: 16px;">
+                                <span>💰 Приходи</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                <input type="checkbox" id="accountFilterTransfer" style="width: 16px; height: 16px;">
+                                <span>🔄 Трансфери</span>
+                            </label>
+                            <span style="margin-left: 16px; font-weight: 500;">Категория:</span>
+                            <select id="accountFilterCategory" class="input" style="width: 200px;">
+                                <option value="">Всички категории</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div id="accountReportResults" style="display: none;">
                     <div class="card">
                         <div class="card-header">
                             <h3>По сметки</h3>
@@ -627,10 +716,7 @@
             <div class="card">
                 <div class="card-header">
                     <h3>Банкови връзки</h3>
-                    <div style="display: flex; gap: 8px;">
-                        <button id="addBankBtn" class="btn btn-primary">+ Добави банка</button>
-                        <button id="cleanupRequisitionsBtn" class="btn btn-danger" title="Изтрий всички незавършени връзки">🗑️ Изчисти</button>
-                    </div>
+                    <button id="addBankBtn" class="btn btn-primary">+ Добави банка</button>
                 </div>
                 <div class="card-body">
                     <div id="requisitionsList">
@@ -652,14 +738,11 @@
 
             <div class="card">
                 <div class="card-header">
-                    <h3>Синхронизация</h3>
+                    <h3>Категоризиране</h3>
                 </div>
                 <div class="card-body">
-                    <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-                        <button id="syncAccountsBtn" class="btn btn-primary">🔄 Синхронизирай сметки</button>
-                        <button id="syncTransactionsBtn" class="btn btn-primary">🔄 Синхронизирай транзакции</button>
-                        <button id="applyCategoriesBtn" class="btn btn-secondary">🏷️ Приложи категоризиране</button>
-                    </div>
+                    <p class="text-muted" style="margin-bottom: 12px;">Приложи правилата за категоризиране върху некатегоризираните транзакции.</p>
+                    <button id="applyCategoriesBtn" class="btn btn-secondary">🏷️ Приложи категоризиране</button>
                     <div id="syncStatus" style="margin-top: 12px;"></div>
                 </div>
             </div>
@@ -720,6 +803,20 @@
         </div>
     </div>
 
+    <!-- Overlay modal (modal over modal) for transaction details -->
+    <div id="overlayModal" class="modal" style="z-index: 2100;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="overlayModalTitle">Детайли</h3>
+                <span class="overlay-modal-close">&times;</span>
+            </div>
+            <div class="modal-body" id="overlayModalBody"></div>
+            <div class="modal-footer">
+                <button id="overlayModalClose" class="btn btn-secondary">Затвори</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Loading spinner -->
     <div id="loader" class="loader" style="display: none;">
         <div class="spinner"></div>
@@ -729,6 +826,45 @@
     <script src="/js/api-client.js"></script>
     <script src="/js/charts.js"></script>
     <script src="/js/dashboard.js"></script>
+    <!-- Sync Modal -->
+    <div id="syncModal" class="modal">
+        <div class="modal-content" style="max-width: 520px;">
+            <div class="modal-header">
+                <h3 class="modal-title">🔄 Синхронизация</h3>
+                <button class="modal-close" id="syncModalClose">✕</button>
+            </div>
+            <div class="modal-body">
+                <!-- Selection phase -->
+                <div id="syncModalSelection">
+                    <p style="margin-bottom: 16px; color: var(--text-secondary);">Изберете какво да се синхронизира:</p>
+                    <div class="sync-options">
+                        <label class="sync-option">
+                            <input type="radio" name="syncMode" value="accounts">
+                            <span>Само сметки</span>
+                        </label>
+                        <label class="sync-option">
+                            <input type="radio" name="syncMode" value="transactions" checked>
+                            <span>Само транзакции</span>
+                        </label>
+                        <label class="sync-option">
+                            <input type="radio" name="syncMode" value="both">
+                            <span>Сметки + транзакции</span>
+                        </label>
+                    </div>
+                </div>
+                <!-- Progress phase -->
+                <div id="syncModalProgress" style="display: none;">
+                    <div id="syncProgressLog" class="sync-progress-log"></div>
+                    <div id="syncSummary" style="display: none;" class="sync-summary"></div>
+                </div>
+            </div>
+            <div class="modal-footer" id="syncModalFooter">
+                <button class="btn btn-secondary" id="syncCancelBtn">Откажи</button>
+                <button class="btn btn-primary" id="syncStartBtn">Синхронизирай</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/js/transactions.js"></script>
     <script src="/js/app.js"></script>
 </body>

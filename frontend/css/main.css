@@ -287,16 +287,40 @@ body {
     background-color: var(--light-bg);
 }
 
+.table-bordered {
+    border: 1px solid var(--border-color);
+}
+
+.table-bordered th,
+.table-bordered td {
+    border: 1px solid var(--border-color);
+}
+
+.table-bordered th {
+    background-color: var(--light-bg);
+}
+
+.table .row-action {
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.table tbody tr:hover .row-action {
+    opacity: 1;
+}
+
 /* Amounts */
 .amount {
     font-size: 24px;
     font-weight: 600;
 }
 
+.positive,
 .amount.positive {
-    color: var(--success-color);
+    color: var(--primary-color);
 }
 
+.negative,
 .amount.negative {
     color: var(--danger-color);
 }
@@ -394,8 +418,19 @@ body {
     color: var(--text-secondary);
 }
 
-.modal-close:hover {
+.modal-close:hover,
+.overlay-modal-close:hover {
     color: var(--text-primary);
+}
+
+.overlay-modal-close {
+    font-size: 28px;
+    cursor: pointer;
+    color: var(--text-secondary);
+}
+
+#overlayModal {
+    background-color: rgba(0, 0, 0, 0.4);
 }
 
 .modal-body {
@@ -488,6 +523,78 @@ body {
         align-items: flex-start;
         gap: 12px;
     }
+}
+
+/* Sync Modal */
+.sync-options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.sync-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.sync-option:hover {
+    background: var(--light-bg);
+    border-color: var(--primary);
+}
+
+.sync-option input[type="radio"] {
+    accent-color: var(--primary);
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.sync-progress-log {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 320px;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+
+.sync-log-line {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 13px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border-color);
+    animation: fadeIn 0.2s ease;
+}
+
+.sync-log-line:last-child {
+    border-bottom: none;
+}
+
+.sync-log-icon {
+    flex-shrink: 0;
+    font-size: 14px;
+}
+
+.sync-summary {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: var(--light-bg);
+    border-radius: 8px;
+    border-left: 4px solid var(--primary);
+    font-size: 14px;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
 /* Progress bar styles */

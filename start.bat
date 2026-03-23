@@ -7,5 +7,5 @@ echo Браузърът ще се отвори автоматично след �
 echo Натиснете Ctrl+C за спиране.
 echo.
 
-start /b cmd /c "timeout /t 3 /nobreak >nul && start http://localhost:3000"
+start /b cmd /c "timeout /t 3 /nobreak >nul && start http://localhost:3456"
 node backend/server.js

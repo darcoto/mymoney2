@@ -8,7 +8,7 @@ const databaseName = process.env.DATABASE_NAME || 'finance.db';
 const databasePath = path.join('./data', databaseName);
 
 module.exports = {
-  port: process.env.PORT || 3000,
+  port: process.env.PORT || 3456,
   databaseName,
   databasePath,
   nodeEnv: process.env.NODE_ENV || 'development'

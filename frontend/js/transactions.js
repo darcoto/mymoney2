@@ -257,7 +257,7 @@ class TransactionsPage {
                     }
                 </td>
                 <td class="${tx.amount >= 0 ? 'positive' : 'negative'}" style="font-weight: 600; text-align: right; white-space: nowrap;">
-                    ${formatCurrency(tx.amount)}
+                    ${formatCurrencyExact(tx.amount)}
                 </td>
                 <td style="text-align: center; white-space: nowrap;">
                     <span class="details-cell" data-id="${tx.id}" data-index="${index}" title="Детайли${tx.notes ? '\n📝 ' + escapeHtml(tx.notes) : ''}" style="cursor: pointer; font-size: 18px;">
@@ -421,8 +421,8 @@ class TransactionsPage {
             }
         }
 
-        // Show original amount if converted
-        let amountDisplay = formatCurrency(transaction.amount);
+        // Show exact amount (no rounding) in detail view
+        let amountDisplay = formatCurrencyExact(transaction.amount);
         if (transaction.original_amount && transaction.original_currency) {
             amountDisplay += ` <span style="color: var(--text-muted); font-size: 12px;">(оригинал: ${transaction.original_amount} ${transaction.original_currency})</span>`;
         }
@@ -467,7 +467,7 @@ class TransactionsPage {
                     <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; width: 110px; border: 1px solid #e0e0e0;"><strong>ID:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-family: monospace; font-size: 10px;">${escapeHtml(transaction.id)}</td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Контрагент:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;"><span style="color: var(--primary-color); font-weight: 600; font-size: 14px;">${escapeHtml(transaction.counterparty_name || '-')}</span> ${transaction.counterparty_name ? `<a href="https://www.google.com/search?q=${encodeURIComponent(googleSearchQuery)}" target="_blank" rel="noopener" style="text-decoration: none; margin-left: 6px;" title="Търси в Google">🔍</a>` : ''}</td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Сума:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-weight: 600; ${transaction.amount >= 0 ? 'color: var(--success-color);' : 'color: var(--danger-color);'}">${amountDisplay}</td></tr>
+                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Сума:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-weight: 600; ${transaction.amount >= 0 ? 'color: var(--primary-color);' : 'color: var(--danger-color);'}">${amountDisplay}</td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Описание:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(transaction.description || '-')}</td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Банка:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(bankName)}</td></tr>
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Сметка:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(accountName)} <span style="color: #888; font-size: 11px;">(${escapeHtml(account?.iban || '')})</span></td></tr>
@@ -482,8 +482,12 @@ class TransactionsPage {
                         <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Създадена:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.created_at || '-'}</td></tr>
                     </table>
 
-                    <h4 style="margin: 16px 0 12px 0; color: var(--primary-color);">Raw данни от GoCardless API</h4>
-                    <pre style="background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; max-height: 200px; overflow: auto; font-size: 11px; white-space: pre-wrap; line-height: 1.3;">${escapeHtml(rawDataContent)}</pre>
+                    <div style="display: flex; align-items: center; gap: 12px; margin: 16px 0 12px 0;">
+                        <h4 style="margin: 0; color: var(--primary-color);">Raw данни от GoCardless API</h4>
+                        <button type="button" id="copyRawDataBtn" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 10px;">Копирай</button>
+                        <button type="button" id="reprocessBtn" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 10px;">Преизчисли</button>
+                    </div>
+                    <pre id="rawDataPre" style="background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; max-height: 200px; overflow: auto; font-size: 11px; white-space: pre-wrap; line-height: 1.3;">${escapeHtml(rawDataContent)}</pre>
                 </div>
                 <div style="width: 520px; flex-shrink: 0;">
                     <h4 style="margin: 0 0 12px 0; color: var(--primary-color);">Категория</h4>
@@ -512,6 +516,129 @@ class TransactionsPage {
         `;
 
         modal.classList.add('active');
+
+        // Copy raw data button
+        document.getElementById('copyRawDataBtn')?.addEventListener('click', () => {
+            navigator.clipboard.writeText(rawDataContent).then(() => {
+                showNotification('Raw данните са копирани', 'success');
+            }).catch(() => {
+                showNotification('Грешка при копиране', 'error');
+            });
+        });
+
+        // Reprocess button - re-run parsing rules and show preview
+        document.getElementById('reprocessBtn')?.addEventListener('click', async () => {
+            try {
+                showLoader();
+                const result = await api.reprocessTransaction(transaction.id);
+                hideLoader();
+
+                if (!result.changes) {
+                    showNotification('Няма промени', 'info');
+                    return;
+                }
+
+                const changes = result.changes;
+                const fieldLabels = {
+                    counterparty_name: 'Контрагент',
+                    description: 'Описание',
+                    amount: 'Сума',
+                    original_amount: 'Оригинална сума',
+                    original_currency: 'Оригинална валута',
+                    transaction_date: 'Дата',
+                    booking_date: 'Дата осчетов.',
+                    country: 'Държава',
+                    category_id: 'Категория'
+                };
+
+                const formatVal = (field, val, extra) => {
+                    if (val === null || val === undefined) return '<span class="text-muted">-</span>';
+                    if (field === 'amount' || field === 'original_amount') return formatCurrencyExact(val);
+                    if (field === 'category_id') {
+                        const name = extra?.name;
+                        const color = extra?.color;
+                        if (name) return `<span class="category-badge" style="background-color: ${color}">${escapeHtml(name)}</span>`;
+                        return '<span class="text-muted">Некатегоризирана</span>';
+                    }
+                    return escapeHtml(String(val));
+                };
+
+                const rows = Object.entries(changes).map(([field, info]) => {
+                    const currentVal = formatVal(field, info.current, { name: info.currentName, color: info.currentColor });
+                    const newVal = formatVal(field, info.new, { name: info.newName, color: info.newColor });
+                    const changed = String(info.current ?? '') !== String(info.new ?? '');
+                    const bgStyle = changed ? 'background: #fff8e1;' : '';
+                    return `
+                        <tr style="${bgStyle}">
+                            <td style="padding: 6px 10px; font-weight: 600; border: 1px solid #e0e0e0; white-space: nowrap;">${fieldLabels[field] || field}</td>
+                            <td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${currentVal}</td>
+                            <td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${newVal}</td>
+                            <td style="padding: 6px 10px; border: 1px solid #e0e0e0; text-align: center;">${changed ? '⚠️' : '✓'}</td>
+                        </tr>
+                    `;
+                }).join('');
+
+                const overlayModal = document.getElementById('overlayModal');
+                const overlayContent = overlayModal.querySelector('.modal-content');
+                overlayContent.style.maxWidth = '800px';
+
+                document.getElementById('overlayModalTitle').textContent = 'Преизчисляване на транзакция';
+                document.getElementById('overlayModalBody').innerHTML = `
+                    <p style="margin: 0 0 12px 0; color: var(--text-secondary); font-size: 13px;">Маркираните в жълто полета ще бъдат променени.</p>
+                    <div class="table-responsive">
+                        <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: #f5f5f5;">
+                                    <th style="padding: 8px 10px; border: 1px solid #e0e0e0; text-align: left;">Поле</th>
+                                    <th style="padding: 8px 10px; border: 1px solid #e0e0e0; text-align: left;">Текуща стойност</th>
+                                    <th style="padding: 8px 10px; border: 1px solid #e0e0e0; text-align: left;">Нова стойност</th>
+                                    <th style="padding: 8px 10px; border: 1px solid #e0e0e0; text-align: center; width: 40px;"></th>
+                                </tr>
+                            </thead>
+                            <tbody>${rows}</tbody>
+                        </table>
+                    </div>
+                `;
+
+                // Replace footer with Apply + Cancel
+                const overlayFooter = overlayModal.querySelector('.modal-footer');
+                overlayFooter.innerHTML = `
+                    <button id="overlayModalClose" class="btn btn-secondary">Отказ</button>
+                    <button id="overlayModalApply" class="btn btn-primary">Приложи промените</button>
+                `;
+
+                overlayModal.classList.add('active');
+
+                const closeOverlay = () => {
+                    overlayContent.style.maxWidth = '';
+                    overlayFooter.innerHTML = '<button id="overlayModalClose" class="btn btn-secondary">Затвори</button>';
+                    overlayModal.classList.remove('active');
+                };
+
+                document.getElementById('overlayModalClose').onclick = closeOverlay;
+                document.querySelector('.overlay-modal-close').onclick = closeOverlay;
+                overlayModal.onclick = (e) => { if (e.target === overlayModal) closeOverlay(); };
+
+                document.getElementById('overlayModalApply').onclick = async () => {
+                    try {
+                        showLoader();
+                        await api.reprocessTransaction(transaction.id, true);
+                        hideLoader();
+                        closeOverlay();
+                        showNotification('Транзакцията е актуализирана', 'success');
+                        // Refresh the transaction detail modal
+                        this.showRawData(null, this.currentTransactionIndex);
+                        await this.loadTransactions();
+                    } catch (err) {
+                        hideLoader();
+                        showNotification('Грешка: ' + err.message, 'error');
+                    }
+                };
+            } catch (error) {
+                hideLoader();
+                showNotification('Грешка при преизчисляване: ' + error.message, 'error');
+            }
+        });
 
         // Add category button handlers
         document.querySelectorAll('.modal-category-btn').forEach(btn => {

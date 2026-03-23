@@ -2,9 +2,9 @@ const express = require('express');
 const router = express.Router();
 const database = require('../database');
 const logger = require('../logger');
-const categorization = require('../categorization');
 const xmlImport = require('../xml-import');
 const revolutImport = require('../revolut-import');
+const { enrichTransaction, loadRules, clearRulesCache } = require('../transaction-processor');
 const { apiError } = require('./helpers');
 
 router.get('/', async (req, res) => {
@@ -99,6 +99,134 @@ router.put('/:id/country', async (req, res) => {
   }
 });
 
+// Re-process a single transaction: re-parse raw_data and re-run enrichment rules
+// preview=true (default): returns current vs new values without saving
+// preview=false (apply=true): saves changes to DB
+const { extractCountryFromCounterparty } = require('../country-codes');
+const { categorizeTransaction, loadRules: loadCatRules, clearRulesCache: clearCatRulesCache } = require('../categorization');
+
+const BGN_TO_EUR_RATE = 1.95583;
+function convertToEur(amount, currency) {
+  if (currency === 'EUR') return amount;
+  if (currency === 'BGN') return amount / BGN_TO_EUR_RATE;
+  return amount;
+}
+
+function parseRawDataToFields(rawData) {
+  const tx = JSON.parse(rawData);
+
+  const originalAmount = parseFloat(
+    tx.transactionAmount?.amount || tx.transaction_amount?.amount || 0
+  );
+  const originalCurrency =
+    tx.transactionAmount?.currency || tx.transaction_amount?.currency || 'EUR';
+  const amountInEur = convertToEur(originalAmount, originalCurrency);
+
+  // Counterparty: GoCardless uses creditorName/debtorName, Enable Banking uses creditor_name/debtor_name
+  const counterpartyName =
+    originalAmount > 0
+      ? (tx.creditorName || tx.creditor_name || '')
+      : (tx.debtorName || tx.debtor_name || tx.creditorName || tx.creditor_name || '');
+
+  const description =
+    tx.remittanceInformationUnstructured || tx.remittance_information || tx.additionalInformation || '';
+
+  const transactionDate = tx.valueDate || tx.value_date || tx.bookingDate || tx.booking_date;
+  const bookingDate = tx.bookingDate || tx.booking_date;
+
+  return {
+    transactionDate,
+    bookingDate,
+    amount: amountInEur,
+    currency: 'EUR',
+    originalAmount: originalCurrency !== 'EUR' ? originalAmount : null,
+    originalCurrency: originalCurrency !== 'EUR' ? originalCurrency : null,
+    description,
+    counterpartyName
+  };
+}
+
+router.post('/:id/reprocess', async (req, res) => {
+  try {
+    const apply = req.body.apply === true;
+    const existing = await database.getQuery('SELECT t.*, c.name as category_name, c.color as category_color FROM transactions t LEFT JOIN categories c ON t.category_id = c.id WHERE t.id = ?', [req.params.id]);
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Транзакцията не е намерена' });
+    }
+
+    if (!existing.raw_data) {
+      return res.status(400).json({ error: 'Няма raw данни за тази транзакция' });
+    }
+
+    // Re-parse raw_data
+    const parsed = parseRawDataToFields(existing.raw_data);
+
+    // Re-run enrichment (country + category)
+    const newCountry = extractCountryFromCounterparty(parsed.counterpartyName) || null;
+
+    await loadCatRules();
+    const newCategoryId = await categorizeTransaction({
+      description: parsed.description,
+      counterpartyName: parsed.counterpartyName
+    });
+    clearCatRulesCache();
+
+    // Get new category info
+    let newCategoryName = null, newCategoryColor = null;
+    if (newCategoryId) {
+      const cat = await database.getQuery('SELECT name, color FROM categories WHERE id = ?', [newCategoryId]);
+      if (cat) {
+        newCategoryName = cat.name;
+        newCategoryColor = cat.color;
+      }
+    }
+
+    const changes = {
+      counterparty_name: { current: existing.counterparty_name, new: parsed.counterpartyName },
+      description: { current: existing.description, new: parsed.description },
+      amount: { current: existing.amount, new: parsed.amount },
+      original_amount: { current: existing.original_amount, new: parsed.originalAmount },
+      original_currency: { current: existing.original_currency, new: parsed.originalCurrency },
+      transaction_date: { current: existing.transaction_date, new: parsed.transactionDate },
+      booking_date: { current: existing.booking_date, new: parsed.bookingDate },
+      country: { current: existing.country, new: newCountry },
+      category_id: {
+        current: existing.category_id,
+        currentName: existing.category_name,
+        currentColor: existing.category_color,
+        new: newCategoryId,
+        newName: newCategoryName,
+        newColor: newCategoryColor
+      }
+    };
+
+    if (apply) {
+      // Apply all parsed + enriched fields
+      await database.runQuery(
+        `UPDATE transactions SET
+          transaction_date = ?, booking_date = ?, amount = ?, currency = ?,
+          description = ?, counterparty_name = ?,
+          original_amount = ?, original_currency = ?,
+          country = ?, category_id = ?
+         WHERE id = ?`,
+        [
+          parsed.transactionDate, parsed.bookingDate, parsed.amount, parsed.currency,
+          parsed.description, parsed.counterpartyName,
+          parsed.originalAmount, parsed.originalCurrency,
+          newCountry, newCategoryId,
+          req.params.id
+        ]
+      );
+      res.json({ success: true, changes });
+    } else {
+      res.json({ success: true, preview: true, changes });
+    }
+  } catch (error) {
+    apiError(res, error);
+  }
+});
+
 // Import transactions from file (auto-detect parser based on account institution)
 router.post('/import-file', async (req, res) => {
   try {
@@ -147,22 +275,13 @@ router.post('/import-file', async (req, res) => {
       });
     }
 
+    await loadRules();
     let categorizedCount = 0;
     for (const tx of transactions) {
-      let categoryId = await categorization.categorizeTransaction({
-        description: tx.description,
-        counterpartyName: tx.counterpartyName
-      });
-
-      if (!categoryId && tx.counterpartyName) {
-        categoryId = await database.getCategoryByCounterparty(tx.counterpartyName);
-      }
-
-      if (categoryId) {
-        tx.categoryId = categoryId;
-        categorizedCount++;
-      }
+      await enrichTransaction(tx);
+      if (tx.categoryId) categorizedCount++;
     }
+    clearRulesCache();
 
     const results = await database.importTransactionsBatch(transactions);
 

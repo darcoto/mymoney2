@@ -8,6 +8,7 @@ const BaseProvider = require('./base-provider');
 const database = require('../database');
 const logger = require('../logger');
 const config = require('../config');
+const { processTransactionBatch } = require('../transaction-processor');
 
 const BASE_URL = 'https://api.enablebanking.com';
 const BGN_TO_EUR_RATE = 1.95583;
@@ -307,7 +308,8 @@ class EnableBankingProvider extends BaseProvider {
             iban: details.iban,
             currency: 'EUR',
             balance: balanceInEur,
-            providerId: this.id
+            providerId: this.id,
+            authorizationId: String(sessionData.session_id || sessionRecord.id || '')
           };
 
           await database.upsertAccount(account);
@@ -333,52 +335,31 @@ class EnableBankingProvider extends BaseProvider {
       const dateFromStr = dateFrom.toISOString().split('T')[0];
 
       const transactionsData = await this.getTransactions(accountId, dateFromStr);
-      const { categorizeTransaction, loadRules, clearRulesCache } = require('../categorization');
-      await loadRules();
+      const rawTransactions = transactionsData.transactions || transactionsData.booked || [];
 
-      let syncedCount = 0;
-      const transactions = transactionsData.transactions || transactionsData.booked || [];
+      const transactions = rawTransactions.map(tx => {
+        const originalAmount = parseFloat(tx.transaction_amount?.amount || tx.transactionAmount?.amount || 0);
+        const originalCurrency = tx.transaction_amount?.currency || tx.transactionAmount?.currency || 'EUR';
+        const amountInEur = convertToEur(originalAmount, originalCurrency);
 
-      for (const tx of transactions) {
-        try {
-          const originalAmount = parseFloat(tx.transaction_amount?.amount || tx.transactionAmount?.amount || 0);
-          const originalCurrency = tx.transaction_amount?.currency || tx.transactionAmount?.currency || 'EUR';
-          const amountInEur = convertToEur(originalAmount, originalCurrency);
+        return {
+          id: tx.transaction_id || tx.entry_reference || `EB-${accountId}-${tx.booking_date || tx.bookingDate}-${originalAmount}`,
+          accountId: accountId,
+          transactionDate: tx.value_date || tx.valueDate || tx.booking_date || tx.bookingDate,
+          bookingDate: tx.booking_date || tx.bookingDate,
+          amount: amountInEur,
+          currency: 'EUR',
+          originalAmount: originalCurrency !== 'EUR' ? originalAmount : null,
+          originalCurrency: originalCurrency !== 'EUR' ? originalCurrency : null,
+          description: tx.remittance_information || tx.remittanceInformationUnstructured || '',
+          counterpartyName: tx.creditor_name || tx.creditorName || tx.debtor_name || tx.debtorName || '',
+          rawData: JSON.stringify(tx)
+        };
+      });
 
-          const transaction = {
-            id: tx.transaction_id || tx.entry_reference || `EB-${accountId}-${tx.booking_date || tx.bookingDate}-${originalAmount}`,
-            accountId: accountId,
-            transactionDate: tx.value_date || tx.valueDate || tx.booking_date || tx.bookingDate,
-            bookingDate: tx.booking_date || tx.bookingDate,
-            amount: amountInEur,
-            currency: 'EUR',
-            originalAmount: originalCurrency !== 'EUR' ? originalAmount : null,
-            originalCurrency: originalCurrency !== 'EUR' ? originalCurrency : null,
-            description: tx.remittance_information || tx.remittanceInformationUnstructured || '',
-            counterpartyName: tx.creditor_name || tx.creditorName || tx.debtor_name || tx.debtorName || '',
-            categoryId: null,
-            rawData: JSON.stringify(tx)
-          };
-
-          let categoryId = await categorizeTransaction(transaction);
-          if (!categoryId && transaction.counterpartyName) {
-            categoryId = await database.getCategoryByCounterparty(transaction.counterpartyName);
-          }
-          transaction.categoryId = categoryId;
-
-          const result = await database.upsertTransaction(transaction);
-          if (result.isNew) {
-            syncedCount++;
-          }
-        } catch (error) {
-          logger.error('[EnableBanking] Error syncing transaction:', error.message);
-        }
-      }
-
-      clearRulesCache();
-      return syncedCount;
+      const { newCount } = await processTransactionBatch(transactions);
+      return newCount;
     } catch (error) {
-      require('../categorization').clearRulesCache();
       logger.error(`[EnableBanking] Error syncing transactions for account ${accountId}:`, error.message);
       throw error;
     }

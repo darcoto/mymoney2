@@ -5,7 +5,7 @@
 
 const crypto = require('crypto');
 const logger = require('./logger');
-const { extractCountryFromCounterparty } = require('./country-codes');
+
 
 // Currency conversion rates to EUR
 const CURRENCY_RATES = {
@@ -351,9 +351,6 @@ function processCsvForImport(csvContent, accountId) {
 
         // Generate unique ID from the entire row
         transaction.id = generateTransactionId(tx.rawRow);
-
-        // Extract country from counterparty name if present
-        transaction.country = extractCountryFromCounterparty(tx.counterpartyName);
 
         return transaction;
     });

@@ -93,4 +93,83 @@ router.post('/transactions', async (req, res) => {
   }
 });
 
+router.post('/run', async (req, res) => {
+  const { mode } = req.body; // 'accounts' | 'transactions' | 'both'
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (msg) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(msg)}\n\n`);
+  };
+
+  try {
+    const configuredProviders = await providerRegistry.getConfiguredProviders();
+
+    if (configuredProviders.length === 0) {
+      send({ type: 'error', text: 'Няма конфигурирани провайдери' });
+      res.end();
+      return;
+    }
+
+    let totalAccountsSynced = 0;
+    let totalTxSynced = 0;
+
+    // --- Sync accounts ---
+    if (mode === 'accounts' || mode === 'both') {
+      for (const provider of configuredProviders) {
+        send({ type: 'step', icon: '🔄', text: `${provider.name}: зарежда сметки...` });
+        try {
+          const accounts = await provider.syncAllAccounts();
+          totalAccountsSynced += accounts.length;
+          send({ type: 'step', icon: '✅', text: `${provider.name}: ${accounts.length} сметки синхронизирани` });
+        } catch (error) {
+          send({ type: 'step', icon: '❌', text: `${provider.name}: ${error.message}` });
+        }
+      }
+    }
+
+    // --- Sync transactions ---
+    if (mode === 'transactions' || mode === 'both') {
+      const accounts = await database.getAllAccounts();
+      const providerMap = {};
+      for (const p of configuredProviders) { providerMap[p.id] = p; }
+
+      const syncableAccounts = accounts.filter(a => a.id !== 'CASH');
+
+      if (syncableAccounts.length === 0) {
+        send({ type: 'step', icon: '⚠️', text: 'Няма сметки за синхронизация на транзакции' });
+      }
+
+      for (const account of syncableAccounts) {
+        const provider = providerMap[account.provider_id]
+          || configuredProviders.find(p => p.type === 'gocardless');
+        if (!provider) continue;
+
+        const name = account.custom_name || account.name;
+        send({ type: 'step', icon: '🔄', text: `${name}...` });
+
+        try {
+          const count = await provider.syncAccountTransactions(account.id);
+          totalTxSynced += count;
+          const icon = count > 0 ? '✅' : '➖';
+          send({ type: 'step', icon, text: `${name}: ${count} нови транзакции` });
+        } catch (error) {
+          send({ type: 'step', icon: '❌', text: `${name}: ${error.message}` });
+        }
+      }
+    }
+
+    send({ type: 'done', accountsSynced: totalAccountsSynced, transactionsSynced: totalTxSynced, mode });
+
+  } catch (error) {
+    logger.error('Sync /run error:', error.message);
+    send({ type: 'error', text: error.message });
+  }
+
+  res.end();
+});
+
 module.exports = router;

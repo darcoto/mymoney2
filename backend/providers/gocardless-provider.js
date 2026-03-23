@@ -6,6 +6,7 @@ const BaseProvider = require('./base-provider');
 const database = require('../database');
 const logger = require('../logger');
 const config = require('../config');
+const { processTransactionBatch } = require('../transaction-processor');
 
 const BASE_URL = 'https://bankaccountdata.gocardless.com';
 const BGN_TO_EUR_RATE = 1.95583;
@@ -337,7 +338,8 @@ class GoCardlessProvider extends BaseProvider {
                 iban: details.iban,
                 currency: 'EUR',
                 balance: balanceInEur,
-                providerId: this.id
+                providerId: this.id,
+                authorizationId: req.id
               };
 
               log(`  Saving account:`, account);
@@ -369,52 +371,31 @@ class GoCardlessProvider extends BaseProvider {
       const dateFromStr = dateFrom.toISOString().split('T')[0];
 
       const transactionsData = await this.getTransactions(accountId, dateFromStr);
-      const { categorizeTransaction, loadRules, clearRulesCache } = require('../categorization');
-      await loadRules();
+      const rawTransactions = transactionsData.booked || [];
 
-      let syncedCount = 0;
-      const transactions = transactionsData.booked || [];
+      const transactions = rawTransactions.map(tx => {
+        const originalAmount = parseFloat(tx.transactionAmount.amount);
+        const originalCurrency = tx.transactionAmount.currency;
+        const amountInEur = convertToEur(originalAmount, originalCurrency);
 
-      for (const tx of transactions) {
-        try {
-          const originalAmount = parseFloat(tx.transactionAmount.amount);
-          const originalCurrency = tx.transactionAmount.currency;
-          const amountInEur = convertToEur(originalAmount, originalCurrency);
+        return {
+          id: tx.transactionId || tx.internalTransactionId || `${accountId}-${tx.bookingDate}-${tx.transactionAmount.amount}`,
+          accountId: accountId,
+          transactionDate: tx.valueDate || tx.bookingDate,
+          bookingDate: tx.bookingDate,
+          amount: amountInEur,
+          currency: 'EUR',
+          originalAmount: originalCurrency !== 'EUR' ? originalAmount : null,
+          originalCurrency: originalCurrency !== 'EUR' ? originalCurrency : null,
+          description: tx.remittanceInformationUnstructured || tx.additionalInformation || '',
+          counterpartyName: originalAmount < 0 ? tx.creditorName : tx.debtorName || '',
+          rawData: JSON.stringify(tx)
+        };
+      });
 
-          const transaction = {
-            id: tx.transactionId || tx.internalTransactionId || `${accountId}-${tx.bookingDate}-${tx.transactionAmount.amount}`,
-            accountId: accountId,
-            transactionDate: tx.valueDate || tx.bookingDate,
-            bookingDate: tx.bookingDate,
-            amount: amountInEur,
-            currency: 'EUR',
-            originalAmount: originalCurrency !== 'EUR' ? originalAmount : null,
-            originalCurrency: originalCurrency !== 'EUR' ? originalCurrency : null,
-            description: tx.remittanceInformationUnstructured || tx.additionalInformation || '',
-            counterpartyName: tx.creditorName || (tx.remittanceInformationUnstructuredArray ? tx.remittanceInformationUnstructuredArray.join(' ') : '') || '',
-            categoryId: null,
-            rawData: JSON.stringify(tx)
-          };
-
-          let categoryId = await categorizeTransaction(transaction);
-          if (!categoryId && transaction.counterpartyName) {
-            categoryId = await database.getCategoryByCounterparty(transaction.counterpartyName);
-          }
-          transaction.categoryId = categoryId;
-
-          const result = await database.upsertTransaction(transaction);
-          if (result.isNew) {
-            syncedCount++;
-          }
-        } catch (error) {
-          logger.error('[GoCardless] Error syncing transaction:', error.message);
-        }
-      }
-
-      clearRulesCache();
-      return syncedCount;
+      const { newCount } = await processTransactionBatch(transactions);
+      return newCount;
     } catch (error) {
-      require('../categorization').clearRulesCache();
       logger.error(`[GoCardless] Error syncing transactions for account ${accountId}:`, error.message);
       throw error;
     }

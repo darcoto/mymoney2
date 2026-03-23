@@ -115,6 +115,9 @@ async function initialize() {
           )
         `);
 
+        // Add authorization_id column to accounts (migration for existing databases)
+        await runQuery(`ALTER TABLE accounts ADD COLUMN authorization_id TEXT`).catch(() => {});
+
         // Create categories table
         await runQuery(`
           CREATE TABLE IF NOT EXISTS categories (
@@ -336,19 +339,20 @@ async function upsertAccount(account) {
     const params = [account.name, account.institutionName, account.iban,
        account.currency, account.balance, new Date().toISOString()];
     if (account.providerId !== undefined) params.push(account.providerId);
+    params.push(account.authorizationId || null);
     params.push(account.id);
 
     return await runQuery(
       `UPDATE accounts SET name = ?, institution_name = ?, iban = ?,
-       currency = ?, balance = ?, last_synced = ?${providerUpdate} WHERE id = ?`,
+       currency = ?, balance = ?, last_synced = ?${providerUpdate}, authorization_id = ? WHERE id = ?`,
       params
     );
   } else {
     return await runQuery(
-      `INSERT INTO accounts (id, name, institution_name, iban, currency, balance, last_synced, provider_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO accounts (id, name, institution_name, iban, currency, balance, last_synced, provider_id, authorization_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [account.id, account.name, account.institutionName, account.iban,
-       account.currency, account.balance, new Date().toISOString(), account.providerId || null]
+       account.currency, account.balance, new Date().toISOString(), account.providerId || null, account.authorizationId || null]
     );
   }
 }
@@ -1247,5 +1251,8 @@ module.exports = {
   getProviderSession,
   saveProviderSession,
   deleteProviderSessions,
-  getAccountsByProvider
+  getAccountsByProvider,
+  // Low-level helpers (for advanced queries in routes)
+  runQuery,
+  getQuery
 };

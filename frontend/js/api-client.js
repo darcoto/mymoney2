@@ -163,6 +163,13 @@ class APIClient {
         });
     }
 
+    async reprocessTransaction(id, apply = false) {
+        return this.request(`/transactions/${encodeURIComponent(id)}/reprocess`, {
+            method: 'POST',
+            body: JSON.stringify({ apply })
+        });
+    }
+
     // Reports
     async getMonthlyReport(year, month, types = null, categoryId = null) {
         const params = new URLSearchParams();

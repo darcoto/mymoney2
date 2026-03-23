@@ -8,6 +8,13 @@ function formatCurrency(amount) {
     return `${sign}${formatted} <span class="currency-symbol">€</span>`;
 }
 
+function formatCurrencyExact(amount) {
+    const absAmount = Math.abs(amount).toFixed(2);
+    const formatted = absAmount.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    const sign = amount < 0 ? '-' : '';
+    return `${sign}${formatted} <span class="currency-symbol">€</span>`;
+}
+
 function formatDate(date) {
     if (typeof date === 'string') {
         date = new Date(date);
@@ -776,6 +783,32 @@ async function loadReportsPage() {
     // Attach generate button
     document.getElementById('generateReport').onclick = generateReport;
 
+    // Populate counterparty report year dropdown and set current month
+    const counterpartyYearSelect = document.getElementById('counterpartyReportYear');
+    counterpartyYearSelect.innerHTML = '';
+    for (let year = currentYear; year >= currentYear - 5; year--) {
+        const option = document.createElement('option');
+        option.value = year;
+        option.textContent = year;
+        if (year === currentYear) option.selected = true;
+        counterpartyYearSelect.appendChild(option);
+    }
+    document.getElementById('counterpartyReportMonth').value = currentMonth;
+    document.getElementById('generateCounterpartyReport').onclick = generateCounterpartyReport;
+
+    // Populate account report year dropdown and set current month
+    const accountYearSelect = document.getElementById('accountReportYear');
+    accountYearSelect.innerHTML = '';
+    for (let year = currentYear; year >= currentYear - 5; year--) {
+        const option = document.createElement('option');
+        option.value = year;
+        option.textContent = year;
+        if (year === currentYear) option.selected = true;
+        accountYearSelect.appendChild(option);
+    }
+    document.getElementById('accountReportMonth').value = currentMonth;
+    document.getElementById('generateAccountReport').onclick = generateAccountReport;
+
     // Report tab switching
     document.querySelectorAll('.report-tab').forEach(tab => {
         tab.addEventListener('click', () => {
@@ -792,12 +825,18 @@ async function loadReportsPage() {
             // Show/hide sections
             const reportType = tab.dataset.report;
             document.getElementById('monthlyReportSection').style.display = 'none';
+            document.getElementById('counterpartyReportSection').style.display = 'none';
+            document.getElementById('accountReportSection').style.display = 'none';
             document.getElementById('yearlyReportSection').style.display = 'none';
             document.getElementById('countryReportSection').style.display = 'none';
             document.getElementById('categoryReportSection').style.display = 'none';
 
             if (reportType === 'monthly') {
                 document.getElementById('monthlyReportSection').style.display = 'block';
+            } else if (reportType === 'counterparty') {
+                document.getElementById('counterpartyReportSection').style.display = 'block';
+            } else if (reportType === 'account') {
+                document.getElementById('accountReportSection').style.display = 'block';
             } else if (reportType === 'yearly') {
                 document.getElementById('yearlyReportSection').style.display = 'block';
                 generateYearlyReport();
@@ -863,17 +902,6 @@ async function generateReport() {
         // Show results
         document.getElementById('reportResults').style.display = 'block';
 
-        // Update stats
-        document.getElementById('reportIncome').innerHTML = formatCurrency(report.stats.total_income || 0);
-        document.getElementById('reportExpenses').innerHTML = formatCurrency(report.stats.total_expenses || 0);
-
-        const balance = (report.stats.total_income || 0) - (report.stats.total_expenses || 0);
-        const balanceEl = document.getElementById('reportBalance');
-        balanceEl.innerHTML = formatCurrency(balance);
-        balanceEl.className = 'amount';
-        if (balance > 0) balanceEl.classList.add('positive');
-        else if (balance < 0) balanceEl.classList.add('negative');
-
         // Render category table
         const categoryBreakdown = report.categoryBreakdown || [];
         const categoryTbody = document.querySelector('#reportCategoryTable tbody');
@@ -919,7 +947,52 @@ async function generateReport() {
             `;
         }
 
-        // Render counterparty table
+        // Make table sortable
+        makeTableSortable('reportCategoryTable');
+
+    } catch (error) {
+        console.error('Error generating report:', error);
+        showNotification('Грешка при генериране на отчет', 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+
+async function generateCounterpartyReport() {
+    const year = document.getElementById('counterpartyReportYear').value;
+    const month = document.getElementById('counterpartyReportMonth').value;
+
+    try {
+        showLoader();
+
+        // Populate category dropdown if empty
+        const categorySelect = document.getElementById('counterpartyFilterCategory');
+        if (categorySelect && categorySelect.options.length <= 1) {
+            const categories = await api.getCategories();
+            categories.forEach(cat => {
+                const option = document.createElement('option');
+                option.value = cat.id;
+                option.textContent = cat.name;
+                categorySelect.appendChild(option);
+            });
+        }
+
+        const types = [];
+        if (document.getElementById('counterpartyFilterExpense')?.checked) types.push('expense');
+        if (document.getElementById('counterpartyFilterIncome')?.checked) types.push('income');
+        if (document.getElementById('counterpartyFilterTransfer')?.checked) types.push('transfer');
+        if (types.length === 0) {
+            types.push('expense', 'income');
+            if (document.getElementById('counterpartyFilterExpense')) document.getElementById('counterpartyFilterExpense').checked = true;
+            if (document.getElementById('counterpartyFilterIncome')) document.getElementById('counterpartyFilterIncome').checked = true;
+        }
+
+        const categoryId = categorySelect?.value || null;
+        const report = await api.getMonthlyReport(year, month, types, categoryId);
+
+        document.getElementById('counterpartyReportResults').style.display = 'block';
+
         const counterpartyBreakdown = report.counterpartyBreakdown || [];
         const counterpartyTbody = document.querySelector('#reportCounterpartyTable tbody');
         const counterpartyTfoot = document.querySelector('#reportCounterpartyTable tfoot');
@@ -964,7 +1037,50 @@ async function generateReport() {
             `;
         }
 
-        // Render account table
+        makeTableSortable('reportCounterpartyTable');
+
+    } catch (error) {
+        console.error('Error generating counterparty report:', error);
+        showNotification('Грешка при генериране на отчет по контрагенти', 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+async function generateAccountReport() {
+    const year = document.getElementById('accountReportYear').value;
+    const month = document.getElementById('accountReportMonth').value;
+
+    try {
+        showLoader();
+
+        // Populate category dropdown if empty
+        const categorySelect = document.getElementById('accountFilterCategory');
+        if (categorySelect && categorySelect.options.length <= 1) {
+            const categories = await api.getCategories();
+            categories.forEach(cat => {
+                const option = document.createElement('option');
+                option.value = cat.id;
+                option.textContent = cat.name;
+                categorySelect.appendChild(option);
+            });
+        }
+
+        const types = [];
+        if (document.getElementById('accountFilterExpense')?.checked) types.push('expense');
+        if (document.getElementById('accountFilterIncome')?.checked) types.push('income');
+        if (document.getElementById('accountFilterTransfer')?.checked) types.push('transfer');
+        if (types.length === 0) {
+            types.push('expense', 'income');
+            if (document.getElementById('accountFilterExpense')) document.getElementById('accountFilterExpense').checked = true;
+            if (document.getElementById('accountFilterIncome')) document.getElementById('accountFilterIncome').checked = true;
+        }
+
+        const categoryId = categorySelect?.value || null;
+        const report = await api.getMonthlyReport(year, month, types, categoryId);
+
+        document.getElementById('accountReportResults').style.display = 'block';
+
         const accountBreakdown = report.accountBreakdown || [];
         const accountTbody = document.querySelector('#reportAccountTable tbody');
         const accountTfoot = document.querySelector('#reportAccountTable tfoot');
@@ -1006,22 +1122,18 @@ async function generateReport() {
             `;
         }
 
-        // Make tables sortable
-        makeTableSortable('reportCategoryTable');
-        makeTableSortable('reportCounterpartyTable');
         makeTableSortable('reportAccountTable');
 
     } catch (error) {
-        console.error('Error generating report:', error);
-        showNotification('Грешка при генериране на отчет', 'error');
+        console.error('Error generating account report:', error);
+        showNotification('Грешка при генериране на отчет по сметки', 'error');
     } finally {
         hideLoader();
     }
 }
 
-
-async function showCategoryTransactions(categoryId, categoryName) {
-    const period = window.currentReportPeriod;
+async function showCategoryTransactions(categoryId, categoryName, periodOverride) {
+    const period = periodOverride || window.currentReportPeriod;
     if (!period) return;
 
     const startDate = `${period.year}-${String(period.month).padStart(2, '0')}-01`;
@@ -1052,20 +1164,25 @@ async function showCategoryTransactions(categoryId, categoryName) {
         if (!transactions || transactions.length === 0) {
             document.getElementById('modalBody').innerHTML = '<p class="text-muted text-center">Няма транзакции за този период</p>';
         } else {
+            // Store transactions for overlay detail view
+            window._categoryTransactions = transactions;
+
             let totalAmount = 0;
-            const rows = transactions.map(tx => {
+            const rows = transactions.map((tx, idx) => {
                 totalAmount += tx.amount;
+                const amountColor = tx.amount >= 0 ? 'var(--primary-color)' : 'var(--danger-color)';
                 return `
-                    <tr>
+                    <tr style="cursor: pointer;" onclick="showTransactionOverlay(${idx})" title="Натисни за детайли">
                         <td style="white-space: nowrap;">${formatDate(new Date(tx.transaction_date))}</td>
                         <td>${escapeHtml(tx.counterparty_name || tx.description || '-')}</td>
-                        <td class="${tx.amount >= 0 ? 'positive' : 'negative'}" style="text-align: right; font-weight: 600;">
+                        <td style="text-align: right; font-weight: 600; color: ${amountColor};">
                             ${formatCurrency(tx.amount)}
                         </td>
                     </tr>
                 `;
             }).join('');
 
+            const totalColor = totalAmount >= 0 ? 'var(--primary-color)' : 'var(--danger-color)';
             document.getElementById('modalBody').innerHTML = `
                 <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
                     <table class="table">
@@ -1080,7 +1197,7 @@ async function showCategoryTransactions(categoryId, categoryName) {
                         <tfoot style="font-weight: 600; background: #f5f5f5;">
                             <tr>
                                 <td colspan="2" style="text-align: right;">Тотал (${transactions.length} транзакции):</td>
-                                <td class="${totalAmount >= 0 ? 'positive' : 'negative'}" style="text-align: right;">${formatCurrency(totalAmount)}</td>
+                                <td style="text-align: right; color: ${totalColor};">${formatCurrency(totalAmount)}</td>
                             </tr>
                         </tfoot>
                     </table>
@@ -1107,6 +1224,58 @@ async function showCategoryTransactions(categoryId, categoryName) {
     }
 }
 
+
+function showTransactionOverlay(index) {
+    const transactions = window._categoryTransactions;
+    if (!transactions || !transactions[index]) return;
+    const tx = transactions[index];
+
+    const overlayModal = document.getElementById('overlayModal');
+    const overlayContent = overlayModal.querySelector('.modal-content');
+    overlayContent.style.maxWidth = '700px';
+
+    document.getElementById('overlayModalTitle').textContent = 'Детайли на транзакция';
+
+    const amountColor = tx.amount >= 0 ? 'var(--primary-color)' : 'var(--danger-color)';
+    let amountDisplay = formatCurrencyExact(tx.amount);
+    if (tx.original_amount && tx.original_currency) {
+        amountDisplay += ` <span style="color: var(--text-muted); font-size: 12px;">(оригинал: ${tx.original_amount} ${tx.original_currency})</span>`;
+    }
+
+    let googleSearchQuery = tx.counterparty_name || '';
+    if (googleSearchQuery.startsWith('BGR ')) {
+        googleSearchQuery = googleSearchQuery.substring(4);
+    }
+
+    document.getElementById('overlayModalBody').innerHTML = `
+        <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
+            <tr><td style="padding: 8px 10px; background: #f5f5f5; width: 130px; border: 1px solid #e0e0e0;"><strong>ID:</strong></td><td style="padding: 8px 10px; border: 1px solid #e0e0e0; font-family: monospace; font-size: 10px;">${escapeHtml(tx.id)}</td></tr>
+            <tr><td style="padding: 8px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Контрагент:</strong></td><td style="padding: 8px 10px; border: 1px solid #e0e0e0;"><span style="color: var(--primary-color); font-weight: 600; font-size: 14px;">${escapeHtml(tx.counterparty_name || '-')}</span>${tx.counterparty_name ? ` <a href="https://www.google.com/search?q=${encodeURIComponent(googleSearchQuery)}" target="_blank" rel="noopener" style="text-decoration: none; margin-left: 6px;" title="Търси в Google">🔍</a>` : ''}</td></tr>
+            <tr><td style="padding: 8px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Сума:</strong></td><td style="padding: 8px 10px; border: 1px solid #e0e0e0; font-weight: 600; color: ${amountColor};">${amountDisplay}</td></tr>
+            <tr><td style="padding: 8px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Описание:</strong></td><td style="padding: 8px 10px; border: 1px solid #e0e0e0;">${escapeHtml(tx.description || '-')}</td></tr>
+            <tr><td style="padding: 8px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Дата:</strong></td><td style="padding: 8px 10px; border: 1px solid #e0e0e0;">${tx.transaction_date}</td></tr>
+            <tr><td style="padding: 8px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Дата осчетов.:</strong></td><td style="padding: 8px 10px; border: 1px solid #e0e0e0;">${tx.booking_date || '-'}</td></tr>
+            <tr><td style="padding: 8px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Категория:</strong></td><td style="padding: 8px 10px; border: 1px solid #e0e0e0;">${tx.category_name ? `<span class="category-badge" style="background-color: ${tx.category_color}">${escapeHtml(tx.category_name)}</span>` : '<span class="text-muted">Некатегоризирана</span>'}</td></tr>
+            <tr><td style="padding: 8px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Държава:</strong></td><td style="padding: 8px 10px; border: 1px solid #e0e0e0;">${tx.country || '-'}</td></tr>
+            ${tx.notes ? `<tr><td style="padding: 8px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Бележки:</strong></td><td style="padding: 8px 10px; border: 1px solid #e0e0e0;">${escapeHtml(tx.notes)}</td></tr>` : ''}
+        </table>
+    `;
+
+    overlayModal.classList.add('active');
+
+    const closeOverlay = () => {
+        overlayContent.style.maxWidth = '';
+        overlayModal.classList.remove('active');
+    };
+
+    document.getElementById('overlayModalClose').onclick = closeOverlay;
+    document.querySelector('.overlay-modal-close').onclick = closeOverlay;
+
+    // Close overlay on backdrop click (but not the underlying modal)
+    overlayModal.onclick = (e) => {
+        if (e.target === overlayModal) closeOverlay();
+    };
+}
 
 async function showAddManualTransactionModal() {
     try {
@@ -1752,13 +1921,19 @@ async function generateCategoryReport() {
 
         tbody.innerHTML = report.categories.map(row => {
             let rowTotal = 0;
+            const escapedName = escapeHtml(row.name).replace(/'/g, "\\'");
             const monthCells = months.map(month => {
                 const data = row.months[month.key];
                 const amount = data ? data.amount : 0;
                 rowTotal += amount;
                 monthTotals[month.key] += amount;
                 const amountClass = amount > 0 ? 'positive' : (amount < 0 ? 'negative' : '');
-                return `<td style="text-align: right;" class="${amountClass}">${amount !== 0 ? formatCurrency(amount) : '-'}</td>`;
+                if (amount !== 0) {
+                    // month.key is "YYYY-MM", parse to year/month for the period
+                    const [y, m] = month.key.split('-');
+                    return `<td style="text-align: right; cursor: pointer;" class="${amountClass}" onclick="showCategoryTransactions(${row.id}, '${escapedName}', {year:'${y}',month:'${parseInt(m)}'})" title="${escapeHtml(row.name)} - ${month.label}">${formatCurrency(amount)}</td>`;
+                }
+                return `<td style="text-align: right;" class="${amountClass}">-</td>`;
             }).join('');
 
             grandTotal += rowTotal;
@@ -2045,7 +2220,6 @@ function renderAuthorizationsList(authorizations) {
                 ${authorizations.map(auth => {
                     const status = statusLabels[auth.status] || { text: auth.status, class: 'badge-secondary' };
                     const createdDate = auth.created ? new Date(auth.created).toLocaleString('bg-BG') : '-';
-                    const isInactive = ['EX', 'RJ', 'EXPIRED'].includes(auth.status);
 
                     return `
                         <tr>
@@ -2055,10 +2229,8 @@ function renderAuthorizationsList(authorizations) {
                             <td>${auth.accounts?.length || 0}</td>
                             <td>${createdDate}</td>
                             <td>
-                                ${isInactive ? `
-                                    <button class="btn btn-danger" style="padding: 4px 8px; font-size: 11px;"
-                                            onclick="deleteProviderAuth(${auth.providerId}, '${auth.id}')">Изтрий</button>
-                                ` : ''}
+                                <button class="btn btn-danger" style="padding: 4px 8px; font-size: 11px;"
+                                        onclick="deleteProviderAuth(${auth.providerId}, '${auth.id}')">Изтрий</button>
                             </td>
                         </tr>
                     `;
@@ -2322,84 +2494,107 @@ async function selectBank(institutionId) {
     }
 }
 
-// Sync accounts
-async function syncAccounts() {
-    try {
-        showLoader();
+// ─── Sync Modal ───────────────────────────────────────────────────────────────
 
-        const result = await api.syncAccounts();
-
-        hideLoader();
-
-        if (result.success) {
-            showNotification(`Успешно синхронизирани ${result.count} сметки!`, 'success');
-
-            // Reload accounts list
-            const accounts = await api.getAccounts();
-            renderAccountsList(accounts);
-
-            // Update dashboard if visible
-            if (document.getElementById('dashboard-page').classList.contains('active')) {
-                dashboard.refresh();
-            }
-        }
-
-    } catch (error) {
-        hideLoader();
-        console.error('Error syncing accounts:', error);
-        showNotification('Грешка при синхронизация: ' + error.message, 'error');
-    }
+function showSyncModal() {
+    const modal = document.getElementById('syncModal');
+    // Reset to selection phase
+    document.getElementById('syncModalSelection').style.display = '';
+    document.getElementById('syncModalProgress').style.display = 'none';
+    document.getElementById('syncProgressLog').innerHTML = '';
+    document.getElementById('syncSummary').style.display = 'none';
+    document.getElementById('syncStartBtn').style.display = '';
+    document.getElementById('syncCancelBtn').textContent = 'Откажи';
+    // Default: transactions
+    document.querySelector('input[name="syncMode"][value="transactions"]').checked = true;
+    modal.classList.add('active');
 }
 
-// Sync transactions
-async function syncTransactions() {
+function closeSyncModal() {
+    document.getElementById('syncModal').classList.remove('active');
+}
+
+function addSyncLogLine(icon, text) {
+    const log = document.getElementById('syncProgressLog');
+    const line = document.createElement('div');
+    line.className = 'sync-log-line';
+    line.innerHTML = `<span class="sync-log-icon">${icon}</span><span>${escapeHtml(text)}</span>`;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+}
+
+async function startSync() {
+    const mode = document.querySelector('input[name="syncMode"]:checked')?.value || 'transactions';
+
+    // Switch to progress phase
+    document.getElementById('syncModalSelection').style.display = 'none';
+    document.getElementById('syncModalProgress').style.display = '';
+    document.getElementById('syncStartBtn').style.display = 'none';
+    document.getElementById('syncCancelBtn').textContent = 'Затвори';
+    document.getElementById('syncCancelBtn').onclick = null; // disable close during sync
+    document.getElementById('syncCancelBtn').disabled = true;
+    document.getElementById('syncModalClose').style.display = 'none';
+
+    const log = document.getElementById('syncProgressLog');
+    log.innerHTML = '';
+    addSyncLogLine('⏳', 'Стартиране...');
+
     try {
-        const accounts = await api.getAccounts();
+        const response = await fetch('/api/sync/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode })
+        });
 
-        if (accounts.length === 0) {
-            showNotification('Няма сметки за синхронизация. Моля, първо добавете банкова сметка.', 'error');
-            return;
-        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-        showLoader();
-        document.getElementById('syncStatus').innerHTML = '<p class="text-muted">Синхронизиране на транзакции...</p>';
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-        const result = await api.syncTransactions();
-
-        hideLoader();
-
-        if (result.success) {
-            const message = `Успешно синхронизирани ${result.transactionsSynced} транзакции!`;
-            showNotification(message, 'success');
-
-            // Build detailed status with breakdown by account
-            let statusHtml = `<p style="color: var(--success-color); margin-bottom: 10px;">✓ ${message}</p>`;
-
-            if (result.byAccount && result.byAccount.length > 0) {
-                statusHtml += '<div style="font-size: 13px;">';
-                result.byAccount.forEach(acc => {
-                    const icon = acc.error ? '❌' : (acc.count > 0 ? '✅' : '➖');
-                    const text = acc.error ? 'грешка' : `${acc.count} нови`;
-                    statusHtml += `<p style="margin: 3px 0;">${icon} ${escapeHtml(acc.accountName)}: ${text}</p>`;
-                });
-                statusHtml += '</div>';
-            }
-
-            document.getElementById('syncStatus').innerHTML = statusHtml;
-
-            // Update dashboard if visible
-            if (document.getElementById('dashboard-page').classList.contains('active')) {
-                dashboard.refresh();
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // last incomplete line stays in buffer
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                try {
+                    const msg = JSON.parse(line.slice(6));
+                    if (msg.type === 'step') {
+                        addSyncLogLine(msg.icon, msg.text);
+                    } else if (msg.type === 'done') {
+                        const parts = [];
+                        if (mode === 'accounts' || mode === 'both')
+                            parts.push(`Сметки: ${msg.accountsSynced}`);
+                        if (mode === 'transactions' || mode === 'both')
+                            parts.push(`Нови транзакции: ${msg.transactionsSynced}`);
+                        document.getElementById('syncSummary').style.display = '';
+                        document.getElementById('syncSummary').innerHTML =
+                            `✅ <strong>Завършено.</strong> ${parts.join(' &nbsp;·&nbsp; ')}`;
+                    } else if (msg.type === 'error') {
+                        addSyncLogLine('❌', msg.text);
+                    }
+                } catch { /* ignore malformed line */ }
             }
         }
 
     } catch (error) {
-        hideLoader();
-        console.error('Error syncing transactions:', error);
-        const errorMsg = 'Грешка при синхронизация: ' + error.message;
-        showNotification(errorMsg, 'error');
-        document.getElementById('syncStatus').innerHTML = `<p style="color: var(--danger-color);">✗ ${errorMsg}</p>`;
+        addSyncLogLine('❌', 'Грешка: ' + error.message);
     }
+
+    // Enable close
+    document.getElementById('syncCancelBtn').disabled = false;
+    document.getElementById('syncCancelBtn').onclick = () => {
+        closeSyncModal();
+        refreshCurrentPage();
+    };
+    document.getElementById('syncModalClose').style.display = '';
+    document.getElementById('syncModalClose').onclick = () => {
+        closeSyncModal();
+        refreshCurrentPage();
+    };
 }
 
 // Apply categorization rules to uncategorized transactions
@@ -2450,34 +2645,48 @@ function renderAccountsList(accounts, providers) {
         providers.forEach(p => { providerMap[p.id] = p.name; });
     }
 
-    container.innerHTML = '';
-    accounts.forEach(account => {
-        const displayName = account.custom_name || account.name;
-        const lastSyncedText = account.last_synced
-            ? new Date(account.last_synced).toLocaleString('bg-BG')
-            : 'Никога';
-        const providerName = providerMap[account.provider_id] || '';
-        const providerBadge = providerName ? `<span class="badge badge-info" style="font-size: 10px; padding: 2px 6px;">${escapeHtml(providerName)}</span>` : '';
+    container.innerHTML = `
+        <div style="overflow-x: auto;">
+            <table class="table table-bordered" style="width: 100%;">
+                <thead>
+                    <tr>
+                        <th>Име на сметката</th>
+                        <th>Провайдер</th>
+                        <th>Идентификатор</th>
+                        <th>Id връзка</th>
+                        <th>Последна актуализация</th>
+                        <th style="text-align: right;">Баланс</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${accounts.map(account => {
+                        const displayName = account.custom_name || account.name;
+                        const providerName = providerMap[account.provider_id] || '-';
+                        const lastSyncedText = account.last_synced
+                            ? new Date(account.last_synced).toLocaleString('bg-BG')
+                            : 'Никога';
+                        const identifier = account.iban || account.id || '-';
+                        const authId = account.authorization_id || '-';
 
-        const div = document.createElement('div');
-        div.className = 'account-item';
-        div.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 8px;';
-        div.innerHTML = `
-            <div class="account-info" style="flex: 1;">
-                <h4 style="margin: 0 0 4px 0; display: flex; align-items: center; gap: 8px;">
-                    ${escapeHtml(displayName)}
-                    ${providerBadge}
-                    <button class="btn btn-secondary" style="padding: 2px 8px; font-size: 11px;" onclick="editAccountName('${account.id}', '${escapeHtml(displayName).replace(/'/g, "\\'")}')">✏️</button>
-                </h4>
-                <p style="margin: 2px 0; font-size: 13px; color: var(--text-secondary);">${escapeHtml(account.institution_name || '')} - ${escapeHtml(account.iban || '')}</p>
-                <p style="margin: 2px 0; font-size: 12px; color: var(--text-muted);">Последна актуализация: ${lastSyncedText}</p>
-            </div>
-            <div class="account-balance" style="font-size: 18px; font-weight: 600;">
-                ${formatCurrency(account.balance || 0)}
-            </div>
-        `;
-        container.appendChild(div);
-    });
+                        return `
+                            <tr>
+                                <td>
+                                    ${escapeHtml(displayName)}
+                                    <button class="btn btn-secondary row-action" style="padding: 2px 6px; font-size: 11px; margin-left: 6px;"
+                                            onclick="editAccountName('${account.id}', '${escapeHtml(displayName).replace(/'/g, "\\'")}')">✏️</button>
+                                </td>
+                                <td><span class="badge badge-info" style="font-size: 11px;">${escapeHtml(providerName)}</span></td>
+                                <td style="font-size: 12px; color: var(--text-secondary);">${escapeHtml(identifier)}</td>
+                                <td style="font-size: 12px; color: var(--text-muted);">${escapeHtml(authId)}</td>
+                                <td style="font-size: 12px;">${lastSyncedText}</td>
+                                <td style="text-align: right; font-weight: 600;">${formatCurrency(account.balance || 0)}</td>
+                            </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
 }
 
 async function editAccountName(accountId, currentName) {
@@ -2499,7 +2708,7 @@ async function editAccountName(accountId, currentName) {
 
 window.editAccountName = editAccountName;
 
-// Sync functionality - sync all (accounts + transactions)
+// Sync functionality - legacy, replaced by showSyncModal()
 async function syncData() {
     const modal = document.getElementById('modal');
     const modalContent = modal.querySelector('.modal-content');
@@ -2683,7 +2892,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // Sync button (main nav)
-    document.getElementById('syncButton').addEventListener('click', syncData);
+    document.getElementById('syncButton').addEventListener('click', showSyncModal);
+    document.getElementById('syncStartBtn').addEventListener('click', startSync);
+    document.getElementById('syncCancelBtn').addEventListener('click', closeSyncModal);
+    document.getElementById('syncModalClose').addEventListener('click', closeSyncModal);
 
     // Transactions page buttons
     document.getElementById('addManualTransactionBtn')?.addEventListener('click', showAddManualTransactionModal);
@@ -2696,9 +2908,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Settings page buttons
     document.getElementById('addBankBtn')?.addEventListener('click', showAddBankModal);
-    document.getElementById('cleanupRequisitionsBtn')?.addEventListener('click', cleanupRequisitions);
-    document.getElementById('syncAccountsBtn')?.addEventListener('click', syncAccounts);
-    document.getElementById('syncTransactionsBtn')?.addEventListener('click', syncTransactions);
     document.getElementById('applyCategoriesBtn')?.addEventListener('click', applyCategories);
     document.getElementById('backupBtn')?.addEventListener('click', createBackup);
     document.getElementById('toggleLogsBtn')?.addEventListener('click', toggleLogsPanel);
