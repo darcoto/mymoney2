@@ -10,6 +10,9 @@ const { processTransactionBatch } = require('../transaction-processor');
 
 const BASE_URL = 'https://bankaccountdata.gocardless.com';
 const BGN_TO_EUR_RATE = 1.95583;
+const DEFAULT_HISTORY_DAYS = 90;
+// Застъпване при инкрементална синхронизация — банките понякога осчетоводяват със закъснение
+const SYNC_OVERLAP_DAYS = 7;
 
 function log(message, data = null) {
   logger.debug(`[GoCardless] ${message}`, data);
@@ -20,6 +23,37 @@ function convertToEur(amount, currency) {
   if (currency === 'BGN') return amount / BGN_TO_EUR_RATE;
   logger.info(`[GoCardless] Unknown currency ${currency}, not converting`);
   return amount;
+}
+
+// Превръща грешка от GoCardless API в разбираемо съобщение за UI
+function describeApiError(error) {
+  const status = error.response?.status;
+  const data = error.response?.data || {};
+  const apiText = [data.summary, data.detail].filter(Boolean).join(' — ');
+
+  if (status === 401 && /EUA|agreement/i.test(apiText)) {
+    const expiredAt = (data.detail || '').match(/expired at (\d{4}-\d{2}-\d{2})/)?.[1];
+    return `Достъпът до банката е изтекъл${expiredAt ? ` на ${expiredAt}` : ''}. ` +
+      'Натиснете „Поднови“ при връзката в Настройки.';
+  }
+  if (status === 429) {
+    return `Достигнат лимит на заявки към банката (GoCardless). ${data.detail || 'Опитайте по-късно.'}`;
+  }
+  if (status) {
+    return `GoCardless (${status}): ${apiText || error.message}`;
+  }
+  return error.message;
+}
+
+// Ключ за разпознаване на една и съща банкова транзакция, ако ID-то ѝ се е сменило
+function transactionMatchKey(raw) {
+  const text = raw.remittanceInformationUnstructured
+    || (raw.remittanceInformationUnstructuredArray || []).join(' ')
+    || raw.additionalInformation || '';
+  return [
+    raw.bookingDate, raw.transactionAmount?.amount, raw.transactionAmount?.currency,
+    raw.entryReference || '', text, raw.creditorName || raw.debtorName || ''
+  ].join('|');
 }
 
 function logApiRequest(method, url, body = null) {
@@ -175,6 +209,7 @@ class GoCardlessProvider extends BaseProvider {
           status: error.response?.status,
           data: error.response?.data
         });
+        error.message = describeApiError(error);
         return Promise.reject(error);
       }
     );
@@ -200,9 +235,13 @@ class GoCardlessProvider extends BaseProvider {
 
       const payload = {
         institution_id: institutionId,
-        redirect: redirectUrl || `http://localhost:${config.port}/#settings`,
+        // GoCardless добавя ?ref=... към адреса — фронтендът го разпознава и стартира синхронизация
+        redirect: redirectUrl || `http://localhost:${config.port}/`,
         reference: `ref-${Date.now()}`
       };
+
+      const agreementId = await this._createMaxAgreement(client, institutionId);
+      if (agreementId) payload.agreement = agreementId;
 
       log('Requisition payload:', payload);
       const response = await client.post('/api/v2/requisitions/', payload);
@@ -216,7 +255,31 @@ class GoCardlessProvider extends BaseProvider {
       };
     } catch (error) {
       logger.error('[GoCardless] Error creating requisition:', error.response?.data || error.message);
-      throw new Error('Failed to create bank requisition');
+      // Префиксът „GoCardless:“ позволява на apiError да покаже съобщението в UI
+      throw new Error(`GoCardless: неуспешно създаване на връзка с банката — ${error.message}`);
+    }
+  }
+
+  /**
+   * Създава End User Agreement с максималните срокове, които банката позволява.
+   * Без него GoCardless ползва 90 дни достъп / 90 дни история.
+   * При неуспех връща null и връзката се създава с подразбиращите се срокове.
+   */
+  async _createMaxAgreement(client, institutionId) {
+    try {
+      const { data: institution } = await client.get(`/api/v2/institutions/${institutionId}/`);
+      const agreement = {
+        institution_id: institutionId,
+        max_historical_days: parseInt(institution.transaction_total_days, 10) || 90,
+        access_valid_for_days: parseInt(institution.max_access_valid_for_days, 10) || 90,
+        access_scope: ['balances', 'details', 'transactions']
+      };
+      log('Creating agreement:', agreement);
+      const { data } = await client.post('/api/v2/agreements/enduser/', agreement);
+      return data.id;
+    } catch (error) {
+      logger.warn(`[GoCardless] Could not create extended agreement, using defaults: ${error.message}`);
+      return null;
     }
   }
 
@@ -243,6 +306,23 @@ class GoCardlessProvider extends BaseProvider {
       const response = await client.get('/api/v2/requisitions/');
       const requisitions = response.data.results || [];
       log(`Found ${requisitions.length} requisitions`);
+
+      // GoCardless оставя статус LN и след изтичане на EUA — изчисляваме реалната валидност
+      await Promise.all(requisitions.map(async (req) => {
+        if (req.status !== 'LN' || !req.agreement) return;
+        try {
+          const { data: eua } = await client.get(`/api/v2/agreements/enduser/${req.agreement}/`);
+          if (!eua.accepted) return;
+          const expiresAt = new Date(eua.accepted);
+          expiresAt.setDate(expiresAt.getDate() + eua.access_valid_for_days);
+          req.expiresAt = expiresAt.toISOString();
+          req.expired = expiresAt < new Date();
+          req.maxHistoricalDays = eua.max_historical_days;
+        } catch (error) {
+          log(`Could not load agreement ${req.agreement}: ${error.message}`);
+        }
+      }));
+
       return requisitions;
     } catch (error) {
       const apiMsg = error.response?.data?.detail || error.response?.data?.summary || error.message;
@@ -305,58 +385,83 @@ class GoCardlessProvider extends BaseProvider {
       log('=== Starting account sync ===');
       const requisitions = await this.listAuthorizations();
       const syncedAccounts = [];
+      const accountErrors = [];
+      const seenAccountIds = new Set();
+      const reportedInstitutions = new Set();
 
-      log(`Processing ${requisitions.length} requisitions...`);
+      // Най-новите връзки първи — при повторно свързване новата връзка има приоритет
+      const linked = requisitions
+        .filter(req => req.status === 'LN' && req.accounts && req.accounts.length > 0)
+        .sort((a, b) => new Date(b.created) - new Date(a.created));
+      const active = linked.filter(req => !req.expired);
+      // Сметки, които все още са достъпни през валидна връзка — не се прехвърлят
+      const activeAccountIds = new Set(active.flatMap(req => req.accounts));
 
-      for (const req of requisitions) {
-        log(`Requisition ${req.id}: status=${req.status}, accounts=${req.accounts?.length || 0}`);
+      for (const req of linked) {
+        if (req.maxHistoricalDays) this._historyDaysCache().set(req.id, req.maxHistoricalDays);
+      }
 
-        if (req.status === 'LN' && req.accounts && req.accounts.length > 0) {
-          log(`Requisition ${req.id} is linked with ${req.accounts.length} accounts`);
+      log(`Processing ${linked.length} linked requisitions (${active.length} active)...`);
 
-          for (const accountId of req.accounts) {
-            try {
-              log(`  Fetching details for account ${accountId}...`);
-              const details = await this.getAccountDetails(accountId);
-              log(`  Details:`, details);
+      for (const req of linked) {
+        if (req.expired) {
+          // Изтекла връзка, заменена от по-нова към същата банка — пропускаме тихо
+          if (active.some(a => a.institution_id === req.institution_id)) continue;
+          // По едно съобщение на банка (за най-новата ѝ връзка)
+          if (reportedInstitutions.has(req.institution_id)) continue;
+          reportedInstitutions.add(req.institution_id);
+          const expiredOn = req.expiresAt ? ` на ${req.expiresAt.split('T')[0]}` : '';
+          accountErrors.push(`Достъпът до ${req.institution_id} е изтекъл${expiredOn}. ` +
+            'Натиснете „Поднови“ при връзката в Настройки.');
+          continue;
+        }
 
-              log(`  Fetching balances for account ${accountId}...`);
-              const balances = await this.getAccountBalance(accountId);
-              log(`  Balances:`, balances);
+        for (const accountId of req.accounts) {
+          if (seenAccountIds.has(accountId)) continue;
+          seenAccountIds.add(accountId);
 
-              const balanceData = balances?.[0] || {};
-              const originalBalance = balanceData.balanceAmount
-                ? parseFloat(balanceData.balanceAmount.amount)
-                : 0;
-              const originalCurrency = details.currency || balanceData.balanceAmount?.currency || 'BGN';
-              const balanceInEur = convertToEur(originalBalance, originalCurrency);
+          try {
+            const details = await this.getAccountDetails(accountId);
+            log(`  Details:`, details);
+            const balances = await this.getAccountBalance(accountId);
+            log(`  Balances:`, balances);
 
-              const account = {
-                id: accountId,
-                name: details.name || details.iban || 'Unknown Account',
-                institutionName: details.institution || req.institution_id || '',
-                iban: details.iban,
-                currency: 'EUR',
-                balance: balanceInEur,
-                providerId: this.id,
-                authorizationId: req.id
-              };
+            const balanceData = balances?.[0] || {};
+            const originalBalance = balanceData.balanceAmount
+              ? parseFloat(balanceData.balanceAmount.amount)
+              : 0;
+            const originalCurrency = details.currency || balanceData.balanceAmount?.currency || 'BGN';
+            const balanceInEur = convertToEur(originalBalance, originalCurrency);
 
-              log(`  Saving account:`, account);
-              await database.upsertAccount(account);
-              syncedAccounts.push(account);
-              log(`  Account ${accountId} synced successfully`);
-            } catch (error) {
-              logger.error(`[GoCardless] Error syncing account ${accountId}:`, error.response?.data || error.message);
-              log(`  Failed to sync account ${accountId}`);
-            }
+            await this._continueExistingAccount(accountId, details.iban, originalCurrency, activeAccountIds);
+
+            const account = {
+              id: accountId,
+              name: details.name || details.iban || 'Unknown Account',
+              institutionName: details.institution || req.institution_id || '',
+              iban: details.iban,
+              currency: 'EUR',
+              originalCurrency,
+              balance: balanceInEur,
+              providerId: this.id,
+              authorizationId: req.id
+            };
+
+            log(`  Saving account:`, account);
+            await database.upsertAccount(account);
+            syncedAccounts.push(account);
+          } catch (error) {
+            logger.error(`[GoCardless] Error syncing account ${accountId}:`, error.response?.data || error.message);
+            accountErrors.push(error.message);
           }
-        } else {
-          log(`Requisition ${req.id} not ready: status=${req.status}`);
         }
       }
 
       log(`=== Sync complete: ${syncedAccounts.length} accounts synced ===`);
+      // Ако нито една сметка не е минала, показваме причината вместо "0 сметки"
+      if (syncedAccounts.length === 0 && accountErrors.length > 0) {
+        throw new Error([...new Set(accountErrors)].join(' '));
+      }
       return syncedAccounts;
     } catch (error) {
       logger.error('[GoCardless] Error syncing all accounts:', error.message);
@@ -364,11 +469,123 @@ class GoCardlessProvider extends BaseProvider {
     }
   }
 
-  async syncAccountTransactions(accountId, daysBack = 90) {
+  /**
+   * При повторно свързване GoCardless може да върне ново ID за същата банкова сметка.
+   * Ако такава сметка вече съществува (IBAN + валута), прехвърляме я към новото ID,
+   * за да продължи историята — транзакции, категории, бележки и потребителско име.
+   */
+  async _continueExistingAccount(accountId, iban, originalCurrency, activeAccountIds) {
+    if (await database.getAccountById(accountId)) return;
+
+    const previous = await database.findAccountForReconnect(
+      this.id, iban, originalCurrency, [...activeAccountIds]
+    );
+    if (!previous) return;
+
+    const moved = await database.migrateAccountId(previous.id, accountId);
+    logger.info(`[GoCardless] Reconnected account ${previous.id} -> ${accountId} (${iban} ${originalCurrency}), ${moved} transactions moved`);
+  }
+
+  _historyDaysCache() {
+    if (!this._historyDays) this._historyDays = new Map();
+    return this._historyDays;
+  }
+
+  /**
+   * Колко дни назад позволява текущото споразумение на сметката (max_historical_days).
+   */
+  async _getHistoryDays(accountId) {
+    const account = await database.getAccountById(accountId);
+    const authId = account?.authorization_id;
+    if (!authId) return DEFAULT_HISTORY_DAYS;
+
+    const cache = this._historyDaysCache();
+    if (!cache.has(authId)) {
+      try {
+        const client = await this._getClient();
+        const { data: req } = await client.get(`/api/v2/requisitions/${authId}/`);
+        const { data: eua } = await client.get(`/api/v2/agreements/enduser/${req.agreement}/`);
+        cache.set(authId, eua.max_historical_days || DEFAULT_HISTORY_DAYS);
+      } catch (error) {
+        log(`Could not determine history days for ${accountId}: ${error.message}`);
+        cache.set(authId, DEFAULT_HISTORY_DAYS);
+      }
+    }
+    return cache.get(authId);
+  }
+
+  /**
+   * Начална дата за изтегляне: от последната синхронизирана транзакция (минус застъпване),
+   * за да се запълнят пропуски след изтекъл достъп, но не по-рано от позволеното от банката.
+   * Нова сметка без история — цялата налична история.
+   */
+  async _getSyncStartDate(accountId) {
+    const historyDays = await this._getHistoryDays(accountId);
+    const earliest = new Date();
+    earliest.setDate(earliest.getDate() - historyDays + 1);
+
+    const lastDate = await database.getLastProviderTransactionDate(accountId);
+    if (!lastDate) return earliest;
+
+    const from = new Date(lastDate);
+    from.setDate(from.getDate() - SYNC_OVERLAP_DAYS);
+    return from > earliest ? from : earliest;
+  }
+
+  /**
+   * Ако банката е сменила ID на вече записана транзакция (напр. след повторно свързване),
+   * връщаме старото ID, за да не се дублира и да запази категорията и бележките си.
+   * Съвпадение 1:1 по дата, сума, валута, референция, описание и контрагент.
+   */
+  async _keepExistingTransactionIds(accountId, transactions) {
+    if (transactions.length === 0) return 0;
+
+    const minDate = transactions.reduce((min, t) => {
+      const d = [t.transactionDate, t.bookingDate].filter(Boolean).sort()[0];
+      return d && d < min ? d : min;
+    }, '9999-12-31');
+    const existing = await database.getProviderTransactions(accountId, minDate);
+    const existingIds = new Set(existing.map(r => r.id));
+    const batchIds = new Set(transactions.map(t => t.id));
+
+    // Записани транзакции, които банката вече не връща със същото ID
+    const unclaimed = new Map();
+    for (const row of existing) {
+      if (batchIds.has(row.id)) continue;
+      let raw;
+      try { raw = JSON.parse(row.raw_data); } catch (e) { continue; }
+      const key = transactionMatchKey(raw);
+      if (!unclaimed.has(key)) unclaimed.set(key, []);
+      unclaimed.get(key).push(row.id);
+    }
+    if (unclaimed.size === 0) return 0;
+
+    let remapped = 0;
+    for (const tx of transactions) {
+      if (existingIds.has(tx.id)) continue;
+      const candidates = unclaimed.get(transactionMatchKey(JSON.parse(tx.rawData)));
+      if (candidates && candidates.length > 0) {
+        const oldId = candidates.shift();
+        log(`  Transaction id changed ${oldId} -> ${tx.id}, keeping ${oldId}`);
+        tx.id = oldId;
+        remapped++;
+      }
+    }
+    if (remapped > 0) logger.info(`[GoCardless] ${remapped} transactions matched to existing records for account ${accountId}`);
+    return remapped;
+  }
+
+  async syncAccountTransactions(accountId, daysBack = null) {
     try {
-      const dateFrom = new Date();
-      dateFrom.setDate(dateFrom.getDate() - daysBack);
+      let dateFrom;
+      if (daysBack) {
+        dateFrom = new Date();
+        dateFrom.setDate(dateFrom.getDate() - daysBack);
+      } else {
+        dateFrom = await this._getSyncStartDate(accountId);
+      }
       const dateFromStr = dateFrom.toISOString().split('T')[0];
+      logger.debug('[GoCardless] syncAccountTransactions', { accountId, dateFrom: dateFromStr });
 
       const transactionsData = await this.getTransactions(accountId, dateFromStr);
       const rawTransactions = transactionsData.booked || [];
@@ -388,10 +605,12 @@ class GoCardlessProvider extends BaseProvider {
           originalAmount: originalCurrency !== 'EUR' ? originalAmount : null,
           originalCurrency: originalCurrency !== 'EUR' ? originalCurrency : null,
           description: tx.remittanceInformationUnstructured || tx.additionalInformation || '',
-          counterpartyName: originalAmount < 0 ? tx.creditorName : tx.debtorName || '',
+          counterpartyName: (originalAmount < 0 ? tx.creditorName : tx.debtorName) || (tx.remittanceInformationUnstructuredArray || []).join(' '),
           rawData: JSON.stringify(tx)
         };
       });
+
+      await this._keepExistingTransactionIds(accountId, transactions);
 
       const { newCount } = await processTransactionBatch(transactions);
       return newCount;

@@ -2,34 +2,56 @@
 
 const API_BASE = '/api';
 
+// Кодира сегмент от пътя (ID може да съдържа специални символи)
+const seg = (value) => encodeURIComponent(value);
+
 class APIClient {
     async request(endpoint, options = {}) {
         const url = `${API_BASE}${endpoint}`;
+        const { headers, ...rest } = options;
 
         try {
             const response = await fetch(url, {
+                ...rest,
                 headers: {
                     'Content-Type': 'application/json',
-                    ...options.headers
-                },
-                ...options
+                    ...headers
+                }
             });
 
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error || 'Request failed');
+                // Тялото може да не е JSON (502, HTML 404 и т.н.)
+                const text = await response.text().catch(() => '');
+                let message = '';
+                try {
+                    const data = JSON.parse(text);
+                    message = data && data.error ? data.error : '';
+                } catch (e) {
+                    message = '';
+                }
+                const error = new Error(message || `HTTP ${response.status}`);
+                error.status = response.status;
+                throw error;
             }
 
-            return await response.json();
+            if (response.status === 204) {
+                return null;
+            }
+            const body = await response.text();
+            return body ? JSON.parse(body) : null;
         } catch (error) {
             console.error('API request failed:', error);
             throw error;
         }
     }
 
-    // Auth
-    async getAuthStatus() {
-        return this.request('/auth/status');
+    // Version
+    async getVersion() {
+        return this.request('/version');
+    }
+
+    async getLogs(lines = 200) {
+        return this.request(`/logs?lines=${encodeURIComponent(lines)}`);
     }
 
     // Accounts
@@ -37,12 +59,8 @@ class APIClient {
         return this.request('/accounts');
     }
 
-    async getAccount(id) {
-        return this.request(`/accounts/${id}`);
-    }
-
     async updateAccountName(id, customName) {
-        return this.request(`/accounts/${id}/name`, {
+        return this.request(`/accounts/${seg(id)}/name`, {
             method: 'PUT',
             body: JSON.stringify({ customName })
         });
@@ -70,7 +88,7 @@ class APIClient {
     }
 
     async updateTransactionCategory(id, categoryId) {
-        return this.request(`/transactions/${id}/category`, {
+        return this.request(`/transactions/${seg(id)}/category`, {
             method: 'PUT',
             body: JSON.stringify({ categoryId })
         });
@@ -84,14 +102,14 @@ class APIClient {
     }
 
     async updateTransactionNotes(id, notes) {
-        return this.request(`/transactions/${id}/notes`, {
+        return this.request(`/transactions/${seg(id)}/notes`, {
             method: 'PUT',
             body: JSON.stringify({ notes })
         });
     }
 
     async updateTransactionCountry(id, country) {
-        return this.request(`/transactions/${id}/country`, {
+        return this.request(`/transactions/${seg(id)}/country`, {
             method: 'PUT',
             body: JSON.stringify({ country })
         });
@@ -120,14 +138,14 @@ class APIClient {
     }
 
     async updateCategory(id, category) {
-        return this.request(`/categories/${id}`, {
+        return this.request(`/categories/${seg(id)}`, {
             method: 'PUT',
             body: JSON.stringify(category)
         });
     }
 
     async deleteCategory(id) {
-        return this.request(`/categories/${id}`, {
+        return this.request(`/categories/${seg(id)}`, {
             method: 'DELETE'
         });
     }
@@ -145,14 +163,14 @@ class APIClient {
     }
 
     async updateCategorizationRule(id, rule) {
-        return this.request(`/categorization-rules/${id}`, {
+        return this.request(`/categorization-rules/${seg(id)}`, {
             method: 'PUT',
             body: JSON.stringify(rule)
         });
     }
 
     async deleteCategorizationRule(id) {
-        return this.request(`/categorization-rules/${id}`, {
+        return this.request(`/categorization-rules/${seg(id)}`, {
             method: 'DELETE'
         });
     }
@@ -164,7 +182,7 @@ class APIClient {
     }
 
     async reprocessTransaction(id, apply = false) {
-        return this.request(`/transactions/${encodeURIComponent(id)}/reprocess`, {
+        return this.request(`/transactions/${seg(id)}/reprocess`, {
             method: 'POST',
             body: JSON.stringify({ apply })
         });
@@ -184,6 +202,20 @@ class APIClient {
         return this.request(`/reports/monthly?${params.toString()}`);
     }
 
+    async getReportTransactions(year, month, types = null, categoryId = null, { counterparty, accountId, country } = {}) {
+        const params = new URLSearchParams();
+        if (year) params.append('year', year);
+        if (month) params.append('month', month);
+        if (country) params.append('country', country);
+        if (types && types.length > 0) {
+            types.forEach(type => params.append('types', type));
+        }
+        if (categoryId) params.append('category_id', categoryId);
+        if (counterparty) params.append('counterparty', counterparty);
+        if (accountId) params.append('account_id', accountId);
+        return this.request(`/reports/transactions?${params.toString()}`);
+    }
+
     async getLast12MonthsReport() {
         return this.request('/reports/last-12-months');
     }
@@ -198,76 +230,56 @@ class APIClient {
         return this.request(`/reports/category-breakdown?${queryString}`);
     }
 
-    async getCounterpartyReport(startDate, endDate) {
-        const params = new URLSearchParams();
-        if (startDate) params.append('start_date', startDate);
-        if (endDate) params.append('end_date', endDate);
-
-        const queryString = params.toString();
-        return this.request(`/reports/counterparty?${queryString}`);
-    }
-
     // Provider management
     async getProviders() {
         return this.request('/providers');
     }
 
     async getProvider(id) {
-        return this.request(`/providers/${id}`);
+        return this.request(`/providers/${seg(id)}`);
     }
 
     async updateProviderCredentials(id, credentials) {
-        return this.request(`/providers/${id}/credentials`, {
+        return this.request(`/providers/${seg(id)}/credentials`, {
             method: 'PUT',
             body: JSON.stringify({ credentials })
         });
     }
 
     async clearProviderCredentials(id) {
-        return this.request(`/providers/${id}/credentials`, {
+        return this.request(`/providers/${seg(id)}/credentials`, {
             method: 'DELETE'
         });
     }
 
     async getProviderStatus(id) {
-        return this.request(`/providers/${id}/status`);
+        return this.request(`/providers/${seg(id)}/status`);
     }
 
     async getProviderCredentialFields(id) {
-        return this.request(`/providers/${id}/credential-fields`);
+        return this.request(`/providers/${seg(id)}/credential-fields`);
     }
 
     // Provider banking operations
     async getInstitutions(providerId, country = 'BG') {
-        return this.request(`/providers/${providerId}/institutions?country=${country}`);
+        const params = new URLSearchParams({ country });
+        return this.request(`/providers/${seg(providerId)}/institutions?${params.toString()}`);
     }
 
     async createAuthorization(providerId, institutionId) {
-        return this.request(`/providers/${providerId}/authorizations`, {
+        return this.request(`/providers/${seg(providerId)}/authorizations`, {
             method: 'POST',
             body: JSON.stringify({ institutionId })
         });
     }
 
     async getAuthorizations(providerId) {
-        return this.request(`/providers/${providerId}/authorizations`);
+        return this.request(`/providers/${seg(providerId)}/authorizations`);
     }
 
     async deleteAuthorization(providerId, authId) {
-        return this.request(`/providers/${providerId}/authorizations/${authId}`, {
+        return this.request(`/providers/${seg(providerId)}/authorizations/${seg(authId)}`, {
             method: 'DELETE'
-        });
-    }
-
-    async syncAccounts() {
-        return this.request('/sync/accounts', {
-            method: 'POST'
-        });
-    }
-
-    async syncTransactions() {
-        return this.request('/sync/transactions', {
-            method: 'POST'
         });
     }
 
@@ -290,14 +302,14 @@ class APIClient {
     }
 
     async updateCounterpartyAlias(id, displayName) {
-        return this.request(`/counterparty-aliases/${id}`, {
+        return this.request(`/counterparty-aliases/${seg(id)}`, {
             method: 'PUT',
             body: JSON.stringify({ displayName })
         });
     }
 
     async deleteCounterpartyAlias(id) {
-        return this.request(`/counterparty-aliases/${id}`, {
+        return this.request(`/counterparty-aliases/${seg(id)}`, {
             method: 'DELETE'
         });
     }
@@ -311,7 +323,7 @@ class APIClient {
     }
 
     async getAccountsByInstitution(pattern) {
-        return this.request(`/accounts/by-institution/${encodeURIComponent(pattern)}`);
+        return this.request(`/accounts/by-institution/${seg(pattern)}`);
     }
 
     // Countries

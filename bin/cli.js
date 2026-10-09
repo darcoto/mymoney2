@@ -48,7 +48,7 @@ child.stdout.on('data', (data) => {
   // Detect server startup message and open browser
   if (!serverStarted && output.includes('MyMoney2 server running')) {
     serverStarted = true;
-    const port = opts.port || env.PORT || 3000;
+    const port = opts.port || env.PORT || 3456;
     const url = `http://localhost:${port}`;
 
     if (opts.open !== false) {

@@ -2,50 +2,49 @@
 
 class Dashboard {
     constructor() {
-        this.isLoaded = false;
+        this.loadingPromise = null;
     }
 
-    async load() {
-        if (this.isLoaded) return;
+    // Винаги опреснява данните; при вече течащо зареждане преизползва същия promise
+    load() {
+        if (this.loadingPromise) return this.loadingPromise;
 
-        try {
-            showLoader();
+        this.loadingPromise = (async () => {
+            try {
+                showLoader();
 
-            // Load summary data
-            await this.loadSummary();
+                // Независимите заявки вървят паралелно (всяка метод обработва грешките си)
+                await Promise.all([
+                    this.loadSummary(),
+                    this.loadCharts(),
+                    this.loadRecentTransactions()
+                ]);
+            } catch (error) {
+                console.error('Error loading dashboard:', error);
+                showNotification('Грешка при зареждане на дашборда', 'error');
+            } finally {
+                hideLoader();
+                this.loadingPromise = null;
+            }
+        })();
 
-            // Load charts
-            await this.loadCharts();
-
-            // Load recent transactions
-            await this.loadRecentTransactions();
-
-            this.isLoaded = true;
-        } catch (error) {
-            console.error('Error loading dashboard:', error);
-            showNotification('Грешка при зареждане на дашборда', 'error');
-        } finally {
-            hideLoader();
-        }
+        return this.loadingPromise;
     }
 
     async loadSummary() {
         try {
-            // Get all accounts for total balance
-            const accounts = await api.getAccounts();
-            const totalBalance = accounts.reduce((sum, acc) => sum + (acc.balance || 0), 0);
-
-            document.getElementById('totalBalance').innerHTML = formatCurrency(totalBalance);
-
-            // Get current month stats
             const now = new Date();
             const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
             const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-            const stats = await api.getTransactionStats(
-                formatDate(startOfMonth),
-                formatDate(endOfMonth)
-            );
+            // Сметки (общ баланс) и статистика за текущия месец — паралелно
+            const [accounts, stats] = await Promise.all([
+                api.getAccounts(),
+                api.getTransactionStats(formatDate(startOfMonth), formatDate(endOfMonth))
+            ]);
+
+            const totalBalance = accounts.reduce((sum, acc) => sum + (acc.balance || 0), 0);
+            document.getElementById('totalBalance').innerHTML = formatCurrency(totalBalance);
 
             const income = stats.total_income || 0;
             const expenses = stats.total_expenses || 0;
@@ -71,20 +70,20 @@ class Dashboard {
 
     async loadCharts() {
         try {
-            // Income vs Expense chart for last 6 months
-            const chartData = await this.getLast6MonthsData();
-            charts.createIncomeExpenseChart('incomeExpenseChart', chartData);
-
-            // Top 5 categories pie chart
             const now = new Date();
             const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
             const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-            const categoryData = await api.getCategoryBreakdown(
-                formatDate(startOfMonth),
-                formatDate(endOfMonth),
-                'expense'
-            );
+            // Данни за 6-месечната графика и топ категориите — паралелно
+            const [chartData, categoryData] = await Promise.all([
+                this.getLast6MonthsData(),
+                api.getCategoryBreakdown(formatDate(startOfMonth), formatDate(endOfMonth), 'expense')
+            ]);
+
+            // Income vs Expense chart for last 6 months
+            charts.createIncomeExpenseChart('incomeExpenseChart', chartData);
+
+            // Top 5 categories pie chart
 
             const top5 = categoryData.slice(0, 5);
             const pieData = {
@@ -95,6 +94,9 @@ class Dashboard {
 
             if (pieData.values.some(v => v > 0)) {
                 charts.createCategoryPieChart('categoryPieChart', pieData);
+            } else {
+                // Няма данни — махаме старата графика, за да не остане остаряла
+                charts.destroyChart('categoryPieChart');
             }
 
         } catch (error) {
@@ -103,33 +105,26 @@ class Dashboard {
     }
 
     async getLast6MonthsData() {
-        const labels = [];
-        const income = [];
-        const expenses = [];
-
         const now = new Date();
-
+        const months = [];
         for (let i = 5; i >= 0; i--) {
-            const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-            const month = date.toLocaleDateString('bg-BG', { month: 'short', year: 'numeric' });
-            labels.push(month);
+            months.push(new Date(now.getFullYear(), now.getMonth() - i, 1));
+        }
 
+        // Шестте заявки вървят паралелно; редът на резултатите следва реда на месеците
+        const statsList = await Promise.all(months.map(async (date) => {
             const startOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
             const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-
             try {
-                const stats = await api.getTransactionStats(
-                    formatDate(startOfMonth),
-                    formatDate(endOfMonth)
-                );
-
-                income.push(stats.total_income || 0);
-                expenses.push(stats.total_expenses || 0);
+                return await api.getTransactionStats(formatDate(startOfMonth), formatDate(endOfMonth));
             } catch (error) {
-                income.push(0);
-                expenses.push(0);
+                return null;
             }
-        }
+        }));
+
+        const labels = months.map(date => date.toLocaleDateString('bg-BG', { month: 'short', year: 'numeric' }));
+        const income = statsList.map(stats => stats?.total_income || 0);
+        const expenses = statsList.map(stats => stats?.total_expenses || 0);
 
         return { labels, income, expenses };
     }
@@ -148,10 +143,18 @@ class Dashboard {
             }
 
             transactions.forEach(tx => {
+                const counterparty = tx.counterparty_display_name || tx.counterparty_name;
+                const title = counterparty || tx.description || '-';
+                // Описанието като втори ред само ако има и контрагент
+                const subtitle = counterparty && tx.description ? tx.description : '';
+
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td>${formatDate(new Date(tx.transaction_date))}</td>
-                    <td>${escapeHtml(tx.description || '-')}</td>
+                    <td>${formatDate(tx.transaction_date)}</td>
+                    <td>
+                        ${escapeHtml(title)}
+                        ${subtitle ? `<div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">${escapeHtml(subtitle)}</div>` : ''}
+                    </td>
                     <td>
                         ${tx.category_name
                             ? `<span class="category-badge" style="background-color: ${tx.category_color}">${escapeHtml(tx.category_name)}</span>`
@@ -171,8 +174,7 @@ class Dashboard {
     }
 
     refresh() {
-        this.isLoaded = false;
-        this.load();
+        return this.load();
     }
 }
 

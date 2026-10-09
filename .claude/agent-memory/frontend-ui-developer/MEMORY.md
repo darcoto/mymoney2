@@ -1,0 +1,1 @@
+- [Frontend structure](frontend-structure.md) — JS file split + load order, data-action delegation, reportState, shared CSS classes, CRLF/sed gotcha

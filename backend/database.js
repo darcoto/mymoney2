@@ -117,6 +117,9 @@ async function initialize() {
 
         // Add authorization_id column to accounts (migration for existing databases)
         await runQuery(`ALTER TABLE accounts ADD COLUMN authorization_id TEXT`).catch(() => {});
+        // Оригиналната валута на сметката при банката (balance/currency са в EUR) —
+        // нужна за разпознаване на сметка при повторно свързване (Revolut: един IBAN, няколко валути)
+        await runQuery(`ALTER TABLE accounts ADD COLUMN original_currency TEXT`).catch(() => {});
 
         // Create categories table
         await runQuery(`
@@ -340,21 +343,114 @@ async function upsertAccount(account) {
        account.currency, account.balance, new Date().toISOString()];
     if (account.providerId !== undefined) params.push(account.providerId);
     params.push(account.authorizationId || null);
+    params.push(account.originalCurrency || null);
     params.push(account.id);
 
     return await runQuery(
       `UPDATE accounts SET name = ?, institution_name = ?, iban = ?,
-       currency = ?, balance = ?, last_synced = ?${providerUpdate}, authorization_id = ? WHERE id = ?`,
+       currency = ?, balance = ?, last_synced = ?${providerUpdate}, authorization_id = ?,
+       original_currency = COALESCE(?, original_currency) WHERE id = ?`,
       params
     );
   } else {
     return await runQuery(
-      `INSERT INTO accounts (id, name, institution_name, iban, currency, balance, last_synced, provider_id, authorization_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO accounts (id, name, institution_name, iban, currency, balance, last_synced, provider_id, authorization_id, original_currency)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [account.id, account.name, account.institutionName, account.iban,
-       account.currency, account.balance, new Date().toISOString(), account.providerId || null, account.authorizationId || null]
+       account.currency, account.balance, new Date().toISOString(), account.providerId || null, account.authorizationId || null,
+       account.originalCurrency || null]
     );
   }
+}
+
+/**
+ * Оригинална валута на сметка: от колоната, иначе най-честата валута
+ * в суровите данни на банковите ѝ транзакции.
+ */
+async function getAccountOriginalCurrency(account) {
+  if (account.original_currency) return account.original_currency;
+  const rows = await allQuery(
+    `SELECT raw_data FROM transactions WHERE account_id = ? AND raw_data LIKE '%"transactionAmount"%'`,
+    [account.id]
+  );
+  const counts = {};
+  for (const row of rows) {
+    try {
+      const currency = JSON.parse(row.raw_data).transactionAmount?.currency;
+      if (currency) counts[currency] = (counts[currency] || 0) + 1;
+    } catch (e) { /* невалиден JSON — пропускаме */ }
+  }
+  const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  return best ? best[0] : null;
+}
+
+/**
+ * Търси съществуваща сметка, която е същата банкова сметка с ново ID
+ * (повторно свързване). Съвпадение по провайдър + IBAN + оригинална валута.
+ * Връща сметката само ако съвпадението е еднозначно.
+ */
+async function findAccountForReconnect(providerId, iban, originalCurrency, excludeIds = []) {
+  if (!iban) return null;
+  const candidates = (await allQuery(
+    'SELECT * FROM accounts WHERE provider_id = ? AND REPLACE(iban, \' \', \'\') = ?',
+    [providerId, iban.replace(/\s/g, '')]
+  )).filter(a => !excludeIds.includes(a.id));
+
+  const matches = [];
+  for (const account of candidates) {
+    const currency = await getAccountOriginalCurrency(account);
+    if (!originalCurrency || !currency || currency === originalCurrency) matches.push({ account, currency });
+  }
+  // При няколко кандидата изискваме точно съвпадение на валутата
+  const exact = matches.filter(m => m.currency && m.currency === originalCurrency);
+  if (exact.length === 1) return exact[0].account;
+  if (matches.length === 1) return matches[0].account;
+  return null;
+}
+
+/**
+ * Прехвърля сметка към ново ID: запазва име, custom_name и всички транзакции
+ * (с техните категории и бележки). Изпълнява се атомарно.
+ */
+async function migrateAccountId(oldId, newId) {
+  await beginTransaction();
+  try {
+    await runQuery(
+      `INSERT INTO accounts (id, name, custom_name, institution_name, iban, currency, balance,
+         provider_id, last_synced, created_at, authorization_id, original_currency)
+       SELECT ?, name, custom_name, institution_name, iban, currency, balance,
+         provider_id, last_synced, created_at, authorization_id, original_currency
+       FROM accounts WHERE id = ?`,
+      [newId, oldId]
+    );
+    const moved = await runQuery('UPDATE transactions SET account_id = ? WHERE account_id = ?', [newId, oldId]);
+    await runQuery('DELETE FROM accounts WHERE id = ?', [oldId]);
+    await commitTransaction();
+    return moved.changes;
+  } catch (error) {
+    await rollbackTransaction();
+    throw error;
+  }
+}
+
+/**
+ * Транзакции на сметка, получени от банков провайдър (имат суров JSON от API-то).
+ */
+async function getProviderTransactions(accountId, fromDate) {
+  return await allQuery(
+    `SELECT id, booking_date, transaction_date, raw_data FROM transactions
+     WHERE account_id = ? AND transaction_date >= ? AND raw_data LIKE '%"transactionAmount"%'`,
+    [accountId, fromDate]
+  );
+}
+
+async function getLastProviderTransactionDate(accountId) {
+  const row = await getQuery(
+    `SELECT MAX(transaction_date) AS last_date FROM transactions
+     WHERE account_id = ? AND raw_data LIKE '%"transactionAmount"%'`,
+    [accountId]
+  );
+  return row ? row.last_date : null;
 }
 
 async function updateAccountCustomName(id, customName) {
@@ -651,10 +747,76 @@ async function deleteCategorizationRule(id) {
 }
 
 // Reports
-async function getMonthlyReport(year, month, types = null, categoryId = null) {
+function getMonthRange(year, month) {
   const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
   const endDate = new Date(year, month, 0);
   const endDateStr = `${year}-${String(month).padStart(2, '0')}-${endDate.getDate()}`;
+  return { startDate, endDateStr };
+}
+
+/**
+ * Общи филтри за справките (период, типове, категория).
+ * Некатегоризираните транзакции се броят като разход.
+ * Очаква таблиците да са с алиаси t (transactions) и c (categories).
+ */
+function appendReportFilters(query, params, { startDate, endDate, types, categoryId }) {
+  if (startDate) {
+    query += ' AND t.transaction_date >= ?';
+    params.push(startDate);
+  }
+  if (endDate) {
+    query += ' AND t.transaction_date <= ?';
+    params.push(endDate);
+  }
+  if (types && types.length > 0) {
+    const typePlaceholders = types.map(() => '?').join(', ');
+    query += ` AND (c.type IN (${typePlaceholders}) OR (c.type IS NULL AND 'expense' IN (${typePlaceholders})))`;
+    params.push(...types, ...types);
+  }
+  if (categoryId) {
+    query += ' AND t.category_id = ?';
+    params.push(categoryId);
+  }
+  return query;
+}
+
+/**
+ * Транзакциите, които формират ред от справка по контрагенти или по сметки —
+ * същите филтри като справката, за да съвпада броят.
+ */
+async function getReportTransactions(year, month, types = null, categoryId = null, { counterparty, accountId, country } = {}) {
+  // Без година/месец — целият период (справка по държави)
+  const { startDate, endDateStr } = year && month ? getMonthRange(year, month) : {};
+  const params = [];
+  let query = `
+    SELECT t.*, c.name as category_name, c.color as category_color, c.type as category_type
+    FROM transactions t
+    LEFT JOIN categories c ON t.category_id = c.id
+    WHERE 1=1
+  `;
+  query = appendReportFilters(query, params, { startDate, endDate: endDateStr, types, categoryId });
+  if (!types || types.length === 0) {
+    // Като getTransactionStats (справка по месеци): без типове — без трансферите
+    query += " AND (c.type IS NULL OR c.type <> 'transfer')";
+  }
+  if (country) {
+    query += ' AND t.country = ?';
+    params.push(country);
+  }
+  if (counterparty) {
+    query += ' AND t.counterparty_name = ?';
+    params.push(counterparty);
+  }
+  if (accountId) {
+    query += ' AND t.account_id = ?';
+    params.push(accountId);
+  }
+  query += ' ORDER BY t.transaction_date DESC, t.id';
+  return await allQuery(query, params);
+}
+
+async function getMonthlyReport(year, month, types = null, categoryId = null) {
+  const { startDate, endDateStr } = getMonthRange(year, month);
 
   const stats = await getTransactionStats(startDate, endDateStr, types, categoryId);
   const categoryBreakdown = await getCategoryBreakdown(startDate, endDateStr, types, categoryId);
@@ -801,6 +963,9 @@ async function getCounterpartyReport(startDate, endDate, types = null, categoryI
     SELECT
       t.counterparty_name,
       COUNT(*) as transaction_count,
+      COUNT(DISTINCT t.category_id) as category_count,
+      SUM(CASE WHEN t.category_id IS NULL THEN 1 ELSE 0 END) as uncategorized_count,
+      GROUP_CONCAT(DISTINCT c.name) as category_names,
       SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END) as total_income,
       SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END) as total_expenses,
       SUM(t.amount) as net_amount
@@ -809,29 +974,7 @@ async function getCounterpartyReport(startDate, endDate, types = null, categoryI
     WHERE t.counterparty_name IS NOT NULL AND t.counterparty_name != ''
   `;
   const params = [];
-
-  if (startDate) {
-    query += ' AND t.transaction_date >= ?';
-    params.push(startDate);
-  }
-
-  if (endDate) {
-    query += ' AND t.transaction_date <= ?';
-    params.push(endDate);
-  }
-
-  // Filter by transaction types
-  if (types && types.length > 0) {
-    const typePlaceholders = types.map(() => '?').join(', ');
-    query += ` AND (c.type IN (${typePlaceholders}) OR (c.type IS NULL AND 'expense' IN (${typePlaceholders})))`;
-    params.push(...types, ...types);
-  }
-
-  // Filter by specific category
-  if (categoryId) {
-    query += ' AND t.category_id = ?';
-    params.push(categoryId);
-  }
+  query = appendReportFilters(query, params, { startDate, endDate, types, categoryId });
 
   query += ' GROUP BY t.counterparty_name ORDER BY transaction_count DESC';
 
@@ -863,29 +1006,7 @@ async function getAccountBreakdown(startDate, endDate, types = null, categoryId 
     WHERE 1=1
   `;
   const params = [];
-
-  if (startDate) {
-    query += ' AND t.transaction_date >= ?';
-    params.push(startDate);
-  }
-
-  if (endDate) {
-    query += ' AND t.transaction_date <= ?';
-    params.push(endDate);
-  }
-
-  // Filter by transaction types
-  if (types && types.length > 0) {
-    const typePlaceholders = types.map(() => '?').join(', ');
-    query += ` AND (c.type IN (${typePlaceholders}) OR (c.type IS NULL AND 'expense' IN (${typePlaceholders})))`;
-    params.push(...types, ...types);
-  }
-
-  // Filter by specific category
-  if (categoryId) {
-    query += ' AND t.category_id = ?';
-    params.push(categoryId);
-  }
+  query = appendReportFilters(query, params, { startDate, endDate, types, categoryId });
 
   query += ' GROUP BY a.id ORDER BY count DESC';
 
@@ -1208,6 +1329,10 @@ module.exports = {
   getAllAccounts,
   getAccountById,
   upsertAccount,
+  findAccountForReconnect,
+  migrateAccountId,
+  getProviderTransactions,
+  getLastProviderTransactionDate,
   updateAccountCustomName,
   getTransactions,
   upsertTransaction,
@@ -1227,6 +1352,7 @@ module.exports = {
   updateCategorizationRule,
   deleteCategorizationRule,
   getMonthlyReport,
+  getReportTransactions,
   getLast12MonthsReport,
   getCategoryBreakdown,
   getCounterpartyReport,

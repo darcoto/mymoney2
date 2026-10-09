@@ -7,7 +7,7 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
     <link rel="stylesheet" href="/css/main.css">
     <link rel="stylesheet" href="/css/dashboard.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="/vendor/chart.umd.min.js"></script>
 </head>
 <body>
     <!-- Navigation -->
@@ -142,7 +142,7 @@
                 <div class="card-header" style="cursor: pointer; display: flex; justify-content: space-between; align-items: center;" id="filtersToggle">
                     <h3 style="margin: 0;">🔍 Филтри</h3>
                     <div style="display: flex; align-items: center; gap: 12px;">
-                        <button id="quickFilterUncategorized" class="btn btn-sm btn-outline" style="font-size: 11px;" onclick="event.stopPropagation();">Некатегоризирани</button>
+                        <button id="quickFilterUncategorized" class="btn btn-sm btn-outline" style="font-size: 11px;">Некатегоризирани</button>
                         <span id="filtersToggleIcon" style="font-size: 18px;">▼</span>
                     </div>
                 </div>
@@ -218,7 +218,7 @@
                                     <th style="width: 90px;">Дата</th>
                                     <th>Контрагент / Описание</th>
                                     <th style="width: 150px;">Категория</th>
-                                    <th style="width: 120px; text-align: right;">Сума</th>
+                                    <th class="num" style="width: 120px;">Сума</th>
                                     <th style="width: 80px; text-align: center;">Действия</th>
                                 </tr>
                             </thead>
@@ -229,9 +229,9 @@
                                     </td>
                                 </tr>
                             </tbody>
-                            <tfoot id="transactionsTableFoot" style="display: none;">
-                                <tr style="background: #f5f5f5; font-weight: 600;">
-                                    <td colspan="3" style="text-align: right;">Тотал:</td>
+                            <tfoot id="transactionsTableFoot" class="table-totals" style="display: none;">
+                                <tr>
+                                    <td colspan="3" class="num">Тотал:</td>
                                     <td id="transactionsTotalAmount" style="text-align: right;"></td>
                                     <td></td>
                                 </tr>
@@ -356,22 +356,22 @@
                                 <button id="generateReport" class="btn btn-primary">Генерирай</button>
                             </div>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee;">
-                            <span style="font-weight: 500;">Тип:</span>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="reportFilterExpense" checked style="width: 16px; height: 16px;">
+                        <div class="filter-row filter-row-divided">
+                            <span class="filter-row-label">Тип:</span>
+                            <label class="check-label">
+                                <input type="checkbox" id="reportFilterExpense" checked>
                                 <span>💸 Разходи</span>
                             </label>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="reportFilterIncome" checked style="width: 16px; height: 16px;">
+                            <label class="check-label">
+                                <input type="checkbox" id="reportFilterIncome" checked>
                                 <span>💰 Приходи</span>
                             </label>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="reportFilterTransfer" style="width: 16px; height: 16px;">
+                            <label class="check-label">
+                                <input type="checkbox" id="reportFilterTransfer">
                                 <span>🔄 Трансфери</span>
                             </label>
-                            <span style="margin-left: 16px; font-weight: 500;">Категория:</span>
-                            <select id="reportFilterCategory" class="input" style="width: 200px;">
+                            <span class="filter-row-label filter-row-label-spaced">Категория:</span>
+                            <select id="reportFilterCategory" class="input">
                                 <option value="">Всички категории</option>
                             </select>
                         </div>
@@ -389,14 +389,14 @@
                                     <thead>
                                         <tr>
                                             <th>Категория</th>
-                                            <th style="text-align: right;">Брой транзакции</th>
-                                            <th style="text-align: right;">Приходи</th>
-                                            <th style="text-align: right;">Разходи</th>
-                                            <th style="text-align: right;">Нето</th>
+                                            <th class="num">Брой транзакции</th>
+                                            <th class="num">Приходи</th>
+                                            <th class="num">Разходи</th>
+                                            <th class="num">Нето</th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
-                                    <tfoot style="font-weight: 600; background: #f5f5f5;"></tfoot>
+                                    <tfoot class="table-totals"></tfoot>
                                 </table>
                             </div>
                         </div>
@@ -434,22 +434,22 @@
                                 <button id="generateCounterpartyReport" class="btn btn-primary">Генерирай</button>
                             </div>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee;">
-                            <span style="font-weight: 500;">Тип:</span>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="counterpartyFilterExpense" checked style="width: 16px; height: 16px;">
+                        <div class="filter-row filter-row-divided">
+                            <span class="filter-row-label">Тип:</span>
+                            <label class="check-label">
+                                <input type="checkbox" id="counterpartyFilterExpense" checked>
                                 <span>💸 Разходи</span>
                             </label>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="counterpartyFilterIncome" checked style="width: 16px; height: 16px;">
+                            <label class="check-label">
+                                <input type="checkbox" id="counterpartyFilterIncome" checked>
                                 <span>💰 Приходи</span>
                             </label>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="counterpartyFilterTransfer" style="width: 16px; height: 16px;">
+                            <label class="check-label">
+                                <input type="checkbox" id="counterpartyFilterTransfer">
                                 <span>🔄 Трансфери</span>
                             </label>
-                            <span style="margin-left: 16px; font-weight: 500;">Категория:</span>
-                            <select id="counterpartyFilterCategory" class="input" style="width: 200px;">
+                            <span class="filter-row-label filter-row-label-spaced">Категория:</span>
+                            <select id="counterpartyFilterCategory" class="input">
                                 <option value="">Всички категории</option>
                             </select>
                         </div>
@@ -466,14 +466,15 @@
                                     <thead>
                                         <tr>
                                             <th>Контрагент</th>
-                                            <th style="text-align: right;">Брой транзакции</th>
-                                            <th style="text-align: right;">Приходи</th>
-                                            <th style="text-align: right;">Разходи</th>
-                                            <th style="text-align: right;">Нето</th>
+                                            <th class="num">Брой транзакции</th>
+                                            <th class="num" title="В колко различни категории са транзакциите на контрагента">Категории</th>
+                                            <th class="num">Приходи</th>
+                                            <th class="num">Разходи</th>
+                                            <th class="num">Нето</th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
-                                    <tfoot style="font-weight: 600; background: #f5f5f5;"></tfoot>
+                                    <tfoot class="table-totals"></tfoot>
                                 </table>
                             </div>
                         </div>
@@ -511,22 +512,22 @@
                                 <button id="generateAccountReport" class="btn btn-primary">Генерирай</button>
                             </div>
                         </div>
-                        <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee;">
-                            <span style="font-weight: 500;">Тип:</span>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="accountFilterExpense" checked style="width: 16px; height: 16px;">
+                        <div class="filter-row filter-row-divided">
+                            <span class="filter-row-label">Тип:</span>
+                            <label class="check-label">
+                                <input type="checkbox" id="accountFilterExpense" checked>
                                 <span>💸 Разходи</span>
                             </label>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="accountFilterIncome" checked style="width: 16px; height: 16px;">
+                            <label class="check-label">
+                                <input type="checkbox" id="accountFilterIncome" checked>
                                 <span>💰 Приходи</span>
                             </label>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="accountFilterTransfer" style="width: 16px; height: 16px;">
+                            <label class="check-label">
+                                <input type="checkbox" id="accountFilterTransfer">
                                 <span>🔄 Трансфери</span>
                             </label>
-                            <span style="margin-left: 16px; font-weight: 500;">Категория:</span>
-                            <select id="accountFilterCategory" class="input" style="width: 200px;">
+                            <span class="filter-row-label filter-row-label-spaced">Категория:</span>
+                            <select id="accountFilterCategory" class="input">
                                 <option value="">Всички категории</option>
                             </select>
                         </div>
@@ -543,14 +544,14 @@
                                     <thead>
                                         <tr>
                                             <th>Сметка (Банка)</th>
-                                            <th style="text-align: right;">Брой транзакции</th>
-                                            <th style="text-align: right;">Приходи</th>
-                                            <th style="text-align: right;">Разходи</th>
-                                            <th style="text-align: right;">Нето</th>
+                                            <th class="num">Брой транзакции</th>
+                                            <th class="num">Приходи</th>
+                                            <th class="num">Разходи</th>
+                                            <th class="num">Нето</th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
-                                    <tfoot style="font-weight: 600; background: #f5f5f5;"></tfoot>
+                                    <tfoot class="table-totals"></tfoot>
                                 </table>
                             </div>
                         </div>
@@ -570,14 +571,14 @@
                                 <thead>
                                     <tr>
                                         <th>Месец</th>
-                                        <th style="text-align: right;">Брой транзакции</th>
-                                        <th style="text-align: right;">Приходи</th>
-                                        <th style="text-align: right;">Разходи</th>
-                                        <th style="text-align: right;">Нето</th>
+                                        <th class="num">Брой транзакции</th>
+                                        <th class="num">Приходи</th>
+                                        <th class="num">Разходи</th>
+                                        <th class="num">Нето</th>
                                     </tr>
                                 </thead>
                                 <tbody></tbody>
-                                <tfoot style="font-weight: 600; background: #f5f5f5;"></tfoot>
+                                <tfoot class="table-totals"></tfoot>
                             </table>
                         </div>
                     </div>
@@ -588,22 +589,22 @@
             <div id="countryReportSection" style="display: none;">
                 <div class="card" style="margin-bottom: 16px;">
                     <div class="card-body" style="padding: 12px 16px;">
-                        <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
-                            <span style="font-weight: 500;">Тип:</span>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="countryFilterExpense" checked style="width: 16px; height: 16px;">
+                        <div class="filter-row">
+                            <span class="filter-row-label">Тип:</span>
+                            <label class="check-label">
+                                <input type="checkbox" id="countryFilterExpense" checked>
                                 <span>💸 Разходи</span>
                             </label>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="countryFilterIncome" style="width: 16px; height: 16px;">
+                            <label class="check-label">
+                                <input type="checkbox" id="countryFilterIncome">
                                 <span>💰 Приходи</span>
                             </label>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="countryFilterTransfer" style="width: 16px; height: 16px;">
+                            <label class="check-label">
+                                <input type="checkbox" id="countryFilterTransfer">
                                 <span>🔄 Трансфери</span>
                             </label>
-                            <span style="margin-left: 16px; font-weight: 500;">Категория:</span>
-                            <select id="countryFilterCategory" class="input" style="width: 200px;">
+                            <span class="filter-row-label filter-row-label-spaced">Категория:</span>
+                            <select id="countryFilterCategory" class="input">
                                 <option value="">Всички категории</option>
                             </select>
                             <button id="applyCountryFilter" class="btn btn-primary btn-sm">Приложи</button>
@@ -620,17 +621,17 @@
                                 <thead>
                                     <tr>
                                         <th>Държава</th>
-                                        <th style="text-align: right;" id="countryYear5"></th>
-                                        <th style="text-align: right;" id="countryYear4"></th>
-                                        <th style="text-align: right;" id="countryYear3"></th>
-                                        <th style="text-align: right;" id="countryYear2"></th>
-                                        <th style="text-align: right;" id="countryYear1"></th>
-                                        <th style="text-align: right;">Общо</th>
-                                        <th style="text-align: right;">Брой</th>
+                                        <th id="countryYear5" class="num"></th>
+                                        <th id="countryYear4" class="num"></th>
+                                        <th id="countryYear3" class="num"></th>
+                                        <th id="countryYear2" class="num"></th>
+                                        <th id="countryYear1" class="num"></th>
+                                        <th class="num">Общо</th>
+                                        <th class="num">Брой</th>
                                     </tr>
                                 </thead>
                                 <tbody></tbody>
-                                <tfoot style="font-weight: 600; background: #f5f5f5;"></tfoot>
+                                <tfoot class="table-totals"></tfoot>
                             </table>
                         </div>
                     </div>
@@ -641,18 +642,18 @@
             <div id="categoryReportSection" style="display: none;">
                 <div class="card" style="margin-bottom: 16px;">
                     <div class="card-body" style="padding: 12px 16px;">
-                        <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
-                            <span style="font-weight: 500;">Тип:</span>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="categoryReportFilterExpense" checked style="width: 16px; height: 16px;">
+                        <div class="filter-row">
+                            <span class="filter-row-label">Тип:</span>
+                            <label class="check-label">
+                                <input type="checkbox" id="categoryReportFilterExpense" checked>
                                 <span>💸 Разходи</span>
                             </label>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="categoryReportFilterIncome" style="width: 16px; height: 16px;">
+                            <label class="check-label">
+                                <input type="checkbox" id="categoryReportFilterIncome">
                                 <span>💰 Приходи</span>
                             </label>
-                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" id="categoryReportFilterTransfer" style="width: 16px; height: 16px;">
+                            <label class="check-label">
+                                <input type="checkbox" id="categoryReportFilterTransfer">
                                 <span>🔄 Трансфери</span>
                             </label>
                             <button id="applyCategoryReportFilter" class="btn btn-primary btn-sm">Приложи</button>
@@ -669,23 +670,23 @@
                                 <thead>
                                     <tr>
                                         <th>Категория</th>
-                                        <th id="catMonth12" style="text-align: right;"></th>
-                                        <th id="catMonth11" style="text-align: right;"></th>
-                                        <th id="catMonth10" style="text-align: right;"></th>
-                                        <th id="catMonth9" style="text-align: right;"></th>
-                                        <th id="catMonth8" style="text-align: right;"></th>
-                                        <th id="catMonth7" style="text-align: right;"></th>
-                                        <th id="catMonth6" style="text-align: right;"></th>
-                                        <th id="catMonth5" style="text-align: right;"></th>
-                                        <th id="catMonth4" style="text-align: right;"></th>
-                                        <th id="catMonth3" style="text-align: right;"></th>
-                                        <th id="catMonth2" style="text-align: right;"></th>
-                                        <th id="catMonth1" style="text-align: right;"></th>
-                                        <th style="text-align: right;">Общо</th>
+                                        <th id="catMonth12" class="num"></th>
+                                        <th id="catMonth11" class="num"></th>
+                                        <th id="catMonth10" class="num"></th>
+                                        <th id="catMonth9" class="num"></th>
+                                        <th id="catMonth8" class="num"></th>
+                                        <th id="catMonth7" class="num"></th>
+                                        <th id="catMonth6" class="num"></th>
+                                        <th id="catMonth5" class="num"></th>
+                                        <th id="catMonth4" class="num"></th>
+                                        <th id="catMonth3" class="num"></th>
+                                        <th id="catMonth2" class="num"></th>
+                                        <th id="catMonth1" class="num"></th>
+                                        <th class="num">Общо</th>
                                     </tr>
                                 </thead>
                                 <tbody></tbody>
-                                <tfoot style="font-weight: 600; background: #f5f5f5;"></tfoot>
+                                <tfoot class="table-totals"></tfoot>
                             </table>
                         </div>
                     </div>
@@ -767,7 +768,7 @@
                     <p>Версия: <span id="appVersion">...</span></p>
                     <p>Интеграция с банкови API доставчици</p>
                     <p style="margin-top: 12px;">
-                        <button id="toggleLogsBtn" class="btn btn-secondary" style="font-size: 12px; padding: 6px 12px;">
+                        <button id="toggleLogsBtn" class="btn btn-secondary btn-sm">
                             📋 Покажи логове
                         </button>
                     </p>
@@ -789,30 +790,30 @@
     </main>
 
     <!-- Modal for editing category/notes -->
-    <div id="modal" class="modal">
+    <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
         <div class="modal-content">
             <div class="modal-header">
                 <h3 id="modalTitle">Заглавие</h3>
-                <span class="modal-close">&times;</span>
+                <button type="button" class="modal-close" aria-label="Затвори" data-modal-close>&times;</button>
             </div>
             <div class="modal-body" id="modalBody"></div>
             <div class="modal-footer">
-                <button id="modalCancel" class="btn btn-secondary">Отказ</button>
-                <button id="modalSave" class="btn btn-primary">Запази</button>
+                <button type="button" id="modalCancel" class="btn btn-secondary" data-modal-close>Отказ</button>
+                <button type="button" id="modalSave" class="btn btn-primary" data-modal-save>Запази</button>
             </div>
         </div>
     </div>
 
     <!-- Overlay modal (modal over modal) for transaction details -->
-    <div id="overlayModal" class="modal" style="z-index: 2100;">
+    <div id="overlayModal" class="modal" style="z-index: 2100;" role="dialog" aria-modal="true" aria-labelledby="overlayModalTitle">
         <div class="modal-content">
             <div class="modal-header">
                 <h3 id="overlayModalTitle">Детайли</h3>
-                <span class="overlay-modal-close">&times;</span>
+                <button type="button" class="overlay-modal-close" aria-label="Затвори" data-modal-close>&times;</button>
             </div>
             <div class="modal-body" id="overlayModalBody"></div>
             <div class="modal-footer">
-                <button id="overlayModalClose" class="btn btn-secondary">Затвори</button>
+                <button type="button" id="overlayModalClose" class="btn btn-secondary" data-modal-close>Затвори</button>
             </div>
         </div>
     </div>
@@ -822,15 +823,11 @@
         <div class="spinner"></div>
     </div>
 
-    <!-- Scripts -->
-    <script src="/js/api-client.js"></script>
-    <script src="/js/charts.js"></script>
-    <script src="/js/dashboard.js"></script>
     <!-- Sync Modal -->
-    <div id="syncModal" class="modal">
+    <div id="syncModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="syncModalTitle">
         <div class="modal-content" style="max-width: 520px;">
             <div class="modal-header">
-                <h3 class="modal-title">🔄 Синхронизация</h3>
+                <h3 class="modal-title" id="syncModalTitle">🔄 Синхронизация</h3>
                 <button class="modal-close" id="syncModalClose">✕</button>
             </div>
             <div class="modal-body">
@@ -865,7 +862,19 @@
         </div>
     </div>
 
+    <!-- Scripts (класически, споделен глобален обхват): първо общите помощници, app.js — последен -->
+    <script src="/js/api-client.js"></script>
+    <script src="/js/utils.js"></script>
+    <script src="/js/modal.js"></script>
+    <script src="/js/transaction-details.js"></script>
+    <script src="/js/charts.js"></script>
+    <script src="/js/dashboard.js"></script>
     <script src="/js/transactions.js"></script>
+    <script src="/js/import.js"></script>
+    <script src="/js/categories.js"></script>
+    <script src="/js/reports.js"></script>
+    <script src="/js/settings.js"></script>
+    <script src="/js/sync.js"></script>
     <script src="/js/app.js"></script>
 </body>
 </html>

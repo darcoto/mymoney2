@@ -4,33 +4,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MyMoney2 is a personal finance management application with multi-provider bank data integration (GoCardless, Enable Banking). It syncs bank accounts/transactions automatically, categorizes transactions via pattern-matching rules, and provides dashboards with financial analytics.
+MyMoney2 is a personal finance management application with multi-provider bank data integration (GoCardless, Enable Banking). It syncs bank accounts/transactions automatically, imports bank files (DSK XML, Revolut CSV), categorizes transactions via pattern-matching rules, and provides dashboards and reports.
 
-**Language:** Bulgarian (UI and documentation)
+**Language:** Bulgarian (UI, user-facing messages and code comments)
 
 ## Commands
 
 ```bash
 npm install          # Install dependencies
-npm start            # Start production server (http://localhost:3456)
+npm start            # Start server (http://localhost:3456)
 npm run dev          # Start with auto-reload (nodemon)
 npm run demo         # Start with demo database (data/demo.db)
 npm run seed-demo    # Create/reset demo database with sample data
+node screenshots.js  # Regenerate README screenshots (puppeteer, expects a running server)
 ```
 
-**Switch database:** Set `DATABASE_NAME=demo.db` in `.env` (requires restart).
+Also: `start.bat` / `start.sh` (start + open browser), `bin/cli.js` (npm CLI `mymoney2 --port <n> --no-open`).
 
-**Database inspection:**
+**Switch database:** `DATABASE_NAME=demo.db` in `.env` (requires restart). Env vars override `.env`, so a second instance can run alongside the main one:
+
 ```bash
-sqlite3 data/finance.db   # Production database
-sqlite3 data/demo.db      # Demo database
+PORT=3499 DATABASE_NAME=zz-test.db node backend/server.js
 ```
+
+## Testing & Verification
+
+- **No test suite** (`npm test` exits with error). Verify changes manually.
+- **Never test against `data/finance.db`** — it is the user's real data. Copy it (`cp data/finance.db data/zz-test.db`), run a second server on another port (see above), then delete the copy.
+- Real bank APIs can't be exercised without the user approving access at the bank. For provider logic, instantiate the provider directly and replace `provider._getClient` with a fake axios-like `{ get, post, delete }` returning `{ data }`.
+- Frontend: check in the browser (Playwright MCP is available) and look at console errors. Static files are served by `express.static` without cache settings and the browser often keeps the old JS/CSS — force-reload (Ctrl+F5) after changes.
+- Port 3456 is usually the user's running instance — don't kill it; use another port for testing.
 
 ## Tech Stack
 
-- **Backend:** Node.js/Express, SQLite3, GoCardless API, Enable Banking API, jsonwebtoken
-- **Frontend:** Vanilla HTML/CSS/JavaScript, Chart.js (no frameworks)
-- **Database:** SQLite at `./data/finance.db` (auto-created on first run)
+- **Backend:** Node.js/Express, SQLite3, axios, jsonwebtoken, fast-xml-parser
+- **Frontend:** Vanilla HTML/CSS/JavaScript, Chart.js 4 (CDN) — no frameworks, no build step
+- **Database:** SQLite at `./data/<DATABASE_NAME>` (auto-created, schema migrated on startup in `database.initialize()`)
 
 ## Architecture
 
@@ -38,101 +47,135 @@ sqlite3 data/demo.db      # Demo database
 
 | File | Purpose |
 |------|---------|
-| `server.js` | Express app entry point; mounts all route modules |
-| `database.js` | SQLite operations, schema, promise wrappers (`runQuery`, `getQuery`, `allQuery`) |
-| `transaction-processor.js` | Shared pipeline: enrich (country + category) + upsert transactions; used by providers and import routes |
+| `server.js` | Express app entry point; mounts route modules, plus a few inline endpoints (countries, counterparty aliases, logs, backup, version) |
+| `database.js` | SQLite operations, schema + migrations, promise wrappers (`runQuery`, `getQuery`, `allQuery` — the last is not exported) |
+| `transaction-processor.js` | Shared pipeline: enrich (country + category) + upsert; used by providers and import routes |
 | `categorization.js` | Transaction auto-categorization engine |
 | `xml-import.js` | DSK Bank XML file parser |
 | `revolut-import.js` | Revolut CSV file parser with approximate currency-to-EUR rates |
 | `country-codes.js` | ISO 3166-1 alpha-3 codes with flag emojis; extracts country from counterparty names |
-| `config.js` | Configuration loader |
-| `logger.js` | File-based logging with rotation (`data/logs/app.log`) |
-| `seed-demo.js` | Demo database seeder (run via `npm run seed-demo`) |
-| `gocardless-api.js` | **Deprecated** thin wrapper delegating to GoCardlessProvider |
+| `config.js` | Configuration loader (`port`, `databasePath`, `nodeEnv`) |
+| `logger.js` | File logging with rotation at 5MB (`data/app.log`) |
+| `seed-demo.js` | Demo database seeder |
 
-Routes are modularized in `backend/routes/`: `providers.js`, `sync.js`, `accounts.js`, `transactions.js`, `categories.js`, `reports.js`, `helpers.js`.
+Routes in `backend/routes/`: `providers.js`, `sync.js`, `accounts.js`, `transactions.js`, `categories.js` (exports `categoryRouter` + `rulesRouter`), `reports.js`, `helpers.js` (`apiError`).
 
 ### Provider System (`backend/providers/`)
 
 | File | Purpose |
 |------|---------|
-| `base-provider.js` | Abstract base class defining provider interface |
-| `provider-registry.js` | Registry/factory for provider instantiation |
+| `base-provider.js` | Abstract base class defining the provider interface |
+| `provider-registry.js` | Registry/factory; classes are registered in `server.js` (scripts that don't load `server.js` must instantiate the provider class directly) |
 | `gocardless-provider.js` | GoCardless Bank Account Data API integration |
 | `enablebanking-provider.js` | Enable Banking API integration (JWT/RSA auth) |
 
 ### Frontend (`frontend/`)
 
-- **SPA architecture:** Single `index.html` with page routing via `data-page` attributes
-- **Module-based:** `app.js` (main), `api-client.js` (API wrapper), `dashboard.js`, `transactions.js`, `charts.js`
-- **API client:** Singleton `APIClient` class with methods for all endpoints
+- **SPA:** single `index.html`, page routing via `data-page` attributes and URL hash
+- **Scripts:** classic `<script>` tags sharing the global scope (no modules, no bundler). Load order in `index.html` matters: `api-client` → `utils` → `modal` → `transaction-details` → `charts` → `dashboard` → `transactions` → `import` → `categories` → `reports` → `settings` → `sync` → `app` (last).
+
+| File | Purpose |
+|------|---------|
+| `api-client.js` | Singleton `api` (`APIClient`); every backend call goes through it (except the SSE stream in `sync.js`) |
+| `utils.js` | Formatting (`formatDate` returns a **local** `YYYY-MM-DD` — never use `toISOString()` for dates), `escapeHtml` (escapes quotes too), `makeTableSortable`, `showLoader`/`hideLoader` (counted, delayed), `showNotification` |
+| `modal.js` | `openModal` / `closeModal` / `updateModal` / `isModalOpen` and `openOverlay` / `closeOverlay` — the only way to use `#modal` / `#overlayModal`; they reset state, handle Escape, backdrop, Enter-to-save, autofocus and double-submit |
+| `transaction-details.js` | Shared "Детайли на транзакция" view (`renderTransactionDetails`, `bindTransactionDetails`) used by the transactions page and report lists |
+| `transactions.js` | Transactions page (`transactionsPage`), filters, pagination, details modal (`showRawData`) |
+| `reports.js` | All reports; `reportState`; `openTransactionsListModal(title, transactions, { showCategory, note })` and `showTransactionOverlay(index)` |
+| `categories.js`, `settings.js`, `sync.js`, `import.js`, `dashboard.js`, `charts.js` | Their pages / dialogs |
+| `app.js` | Routing (`navigateToPage` returns a promise), `refreshCurrentPage`, `ACTION_HANDLERS`, init (incl. `?ref=` return from the bank) |
+
+- **Events:** no inline `onclick`. Generated HTML uses `data-action="..."` + data-* attributes, dispatched by the delegated handler / `ACTION_HANDLERS` in `app.js`; page-specific lists use delegated listeners bound once. Listeners must be bound once — page loaders run on every visit.
+- **Escaping:** everything from the server (especially bank data: counterparty names, descriptions) goes through `escapeHtml` before `innerHTML`.
+- **Chart.js** is vendored in `frontend/vendor/` (no CDN — the app must work offline).
 
 ### Database Schema (7 tables)
 
-- `accounts` - Bank accounts with IBAN, balance, institution, provider_id
-- `transactions` - Individual transactions with dates, amounts, descriptions
-- `categories` - Categories with colors, icons, types (income/expense/transfer)
-- `categorization_rules` - Pattern-matching rules with priority
-- `providers` - Bank data providers (GoCardless, Enable Banking) with credentials
-- `provider_sessions` - Provider auth tokens/sessions (replaces gocardless_tokens)
-- `gocardless_tokens` - **Legacy**, kept for migration only
+- `accounts` — bank accounts: IBAN, balance (EUR), institution, `provider_id`, `authorization_id`, `original_currency` (the account's currency at the bank; `currency` is always EUR). Special account `CASH` holds manual transactions.
+- `transactions` — dates, amounts (EUR) + `original_amount/currency`, description, counterparty, category, notes, country, `raw_data`
+- `categories` — colors, icons, `type` (income/expense/transfer)
+- `categorization_rules` — pattern-matching rules with priority
+- `providers` — bank data providers with credentials (JSON)
+- `provider_sessions` — provider auth tokens/sessions
+- `counterparty_aliases` — display names for counterparties
+
+**Transaction ID sources** (matters for deduplication):
+
+| Prefix / form | Source |
+|---|---|
+| `DSK_xxxxxxxx` | DSK XML import (hash) |
+| `REV_xxxxxxxx` | Revolut CSV import (hash) |
+| `CASH_<ts>_<rand>` | Manual cash transaction |
+| other | Bank API: GoCardless `transactionId`, else `internalTransactionId` (DSK returns only the latter) |
+
+Bank-API transactions have JSON `raw_data` with `transactionAmount`; queries use `raw_data LIKE '%"transactionAmount"%'` to select them. File imports and API data for the same period are **not** cross-deduplicated (known: ~24 Revolut duplicates Oct–Dec 2025).
 
 ## Key Implementation Patterns
 
 **Provider abstraction:**
-- `BaseProvider` defines the interface: `getInstitutions()`, `createAuthorization()`, `syncAllAccounts()`, etc.
-- Each provider class extends BaseProvider and implements the interface
-- `provider-registry.js` maps type → class and provides factory methods
-- Credentials stored in `providers` table (JSON), managed via UI
-- Sessions/tokens stored in `provider_sessions` table
+- `BaseProvider` defines the interface: `getInstitutions()`, `createAuthorization()`, `listAuthorizations()`, `syncAllAccounts()`, `syncAccountTransactions()`, etc.
+- Credentials are stored in the `providers` table and managed via UI (not `.env`)
 
 **Database operations:**
-- All queries are parameterized (SQL injection protection)
-- SQLite callbacks wrapped in promises via helper functions
-- Upsert pattern for accounts/transactions (create if new, skip if exists by ID)
+- All queries are parameterized
+- Upsert for transactions: insert if new; if the ID exists, update bank-provided fields but keep `category_id` and `notes`
+- `PRAGMA foreign_keys = ON` — to change an account ID use `migrateAccountId()` (insert copy → move transactions → delete old)
+- Schema changes: add `ALTER TABLE ... ADD COLUMN` with `.catch(() => {})` in `initialize()`
+
+**Errors to the UI:**
+- `apiError()` shows the real message only if it starts with `GoCardless:` / `Enable Banking:` / `Provider `, or contains `not found` / `задължителн` / `не е намерен`; otherwise the user sees a generic message. Prefix provider errors accordingly.
+- The `/api/sync/run` SSE stream sends `error.message` directly.
 
 **GoCardless integration:**
-- Automatic token refresh 5 minutes before expiration
-- Debug logging controlled by `NODE_ENV=development`
-- Account sync requires "LN" (Linked) status from requisitions
+- Access token refreshed automatically 5 minutes before expiry
+- Account sync uses requisitions with status `LN`. GoCardless keeps `LN` even after the End User Agreement (EUA) expires — `listAuthorizations()` loads each agreement and adds `expiresAt` / `expired`.
+- EUA cannot be extended for EU banks (`reconfirm` is GB-only) — the user must approve again at the bank. `createAuthorization()` creates an agreement with the institution's maximum `access_valid_for_days` (DSK/Revolut: 180) and `max_historical_days` (DSK 90, Revolut 730).
+- **Reconnect ("Поднови" in Settings) must continue history:** a new account ID is matched to the existing account by IBAN + `original_currency` (the Revolut accounts share one IBAN) and migrated; a transaction whose bank ID changed is matched 1:1 (date, amount, currency, reference, text, counterparty) and keeps its old ID, category and notes.
+- Transaction sync is incremental: from the last bank transaction minus 7 days, clamped to the agreement's history window (new account → full history).
+- Redirect after bank approval is `http://localhost:<port>/`; GoCardless appends `?ref=...` and the frontend then auto-runs a full sync.
+- HTTP errors are turned into readable Bulgarian messages in `describeApiError()` (expired EUA, 429 rate limit).
 
 **Enable Banking integration:**
-- JWT signed with RSA private key (PS256 algorithm) for each request
+- JWT signed with RSA private key (PS256) for each request
 - Flow: JWT → GET /aspsps → POST /auth → user authorizes → POST /sessions → GET /accounts/transactions
 
 **Auto-categorization:**
-- Patterns are case-insensitive
-- Multiple patterns separated by `|` (OR logic)
-- Applied in priority order (highest first)
-- Matches against transaction description and counterparty
+- Patterns are case-insensitive; multiple patterns separated by `|` (OR)
+- Applied in priority order (highest first), matching description and counterparty
+- Fallback: category of the latest transaction with the same counterparty
 
-**Frontend:**
-- Currency formatting in Bulgarian (euro)
-- All API calls through singleton `APIClient` class
-- Page navigation via `data-page` attributes
+**Reports:**
+- Report filters live in `appendReportFilters()` in `database.js` (period, types, category). Uncategorized transactions count as `expense`.
+- `GET /reports/transactions` returns the transactions behind a report row using the same filters, so counts and lists match. Keep both sides on the shared helper when changing a report.
 
 ## Environment Variables
 
-Required in `.env` (see `.env.example`):
-- `PORT` - Server port (default 3456)
-- `DATABASE_NAME` - SQLite filename in `./data/` (default `finance.db`). For demo: `demo.db`. **Requires restart.**
-- `NODE_ENV` - Set to `development` for debug logging
-- `GOCARDLESS_SECRET_ID` / `GOCARDLESS_SECRET_KEY` - **Optional**, for initial migration only. Credentials are now managed via UI.
+In `.env` (see `.env.example`):
+- `PORT` — server port (default 3456)
+- `DATABASE_NAME` — SQLite filename in `./data/` (default `finance.db`; demo: `demo.db`). **Requires restart.**
+- `NODE_ENV` — defaults to `development` when unset; in development log lines are also printed to the console
 
 ## API Endpoints
 
-Key endpoint groups (all prefixed with `/api/`):
-- **Providers:** `GET /providers`, `GET /providers/:id`, `PUT /providers/:id/credentials`, `DELETE /providers/:id/credentials`, `GET /providers/:id/credential-fields`, `GET /providers/:id/status`
-- **Provider Banking:** `GET /providers/:id/institutions`, `POST /providers/:id/authorizations`, `GET /providers/:id/authorizations`, `DELETE /providers/:id/authorizations/:authId`
-- **Accounts:** `GET /accounts`, `PUT /accounts/:id/name`
-- **Transactions:** `GET /transactions` (filters: account_id, start_date, end_date, category_id, type, search, country, limit, offset), `GET /transactions/stats`, `POST /transactions` (manual), `POST /transactions/import-file` (auto-detects DSK XML or Revolut CSV), `POST /transactions/categorize-by-counterparty`, `PUT /transactions/:id/category`, `PUT /transactions/:id/notes`, `PUT /transactions/:id/country`
-- **Categories:** CRUD at `/categories`, `/categorization-rules`
-- **GoCardless (legacy):** `/gocardless/institutions`, `/gocardless/requisitions` (backward compat)
-- **Sync:** `POST /sync/accounts`, `POST /sync/transactions` (iterates all configured providers)
-- **Reports:** `/reports/monthly`, `/reports/category-breakdown`, `/reports/last-12-months`, `/reports/counterparty`
+All prefixed with `/api/`:
+- **Providers:** `GET /providers`, `GET /providers/:id`, `PUT|DELETE /providers/:id/credentials`, `GET /providers/:id/credential-fields`, `GET /providers/:id/status`
+- **Provider banking:** `GET /providers/:id/institutions`, `POST|GET /providers/:id/authorizations`, `GET|DELETE /providers/:id/authorizations/:authId`
+- **Sync:** `POST /sync/run` (SSE progress stream, body `{ mode: 'accounts'|'transactions'|'both' }` — used by the UI), `POST /sync/accounts`, `POST /sync/transactions`
+- **Accounts:** `GET /accounts`, `GET /accounts/:id`, `GET /accounts/by-institution/:pattern`, `PUT /accounts/:id/name`
+- **Transactions:** `GET /transactions` (filters: account_id, start_date, end_date, category_id, type, search, country, limit, offset), `GET /transactions/stats`, `POST /transactions` (manual), `POST /transactions/import-file` (DSK XML or Revolut CSV), `POST /transactions/categorize-by-counterparty`, `PUT /transactions/:id/category|notes|country`, `POST /transactions/:id/reprocess`
+- **Categories:** CRUD at `/categories`; `/categorization-rules` CRUD + `POST /categorization-rules/apply`
+- **Reports:** `/reports/monthly` (category/counterparty/account breakdowns), `/reports/transactions`, `/reports/last-12-months`, `/reports/category-breakdown`, `/reports/counterparty`, `/reports/country`, `/reports/category-monthly`
+- **Other:** `/countries`, `/countries/:code`, `/counterparty-aliases` (CRUD), `GET /logs`, `POST /backup`, `GET /version`
+
+## Versioning & Claude Code Setup
+
+- App version is in `VERSION` (`major.minor`, served by `/api/version`); `package.json` version is separate.
+- Hook `.claude/hooks/version-bump.js` bumps the minor version and stages `VERSION` on every `git commit` run through Claude Code. It is enabled in `.claude/settings.local.json` (git-ignored, so only on this machine).
+- Skills: `/restart`, `/version-up` (manual invocation only)
+- Agents: `backend-node-expert`, `frontend-ui-developer`, `api-docs-researcher`
 
 ## Notes
 
-- **No test suite:** Tests are not configured (`npm test` exits with error)
-- **Logging:** Debug logs written to `data/logs/app.log` when `NODE_ENV=development`
-- **Currency:** All amounts converted to EUR; BGN converted at fixed rate in provider implementations
+- **Logging:** all levels (including DEBUG and every SQL query) go to `data/app.log`; it gets large, so read it with `tail`/`grep`
+- **Currency:** all amounts stored in EUR; BGN converted at the fixed rate 1.95583 in providers; other currencies keep the original in `original_amount/original_currency`
+- **Backups:** `POST /api/backup` writes to `data/backups/`

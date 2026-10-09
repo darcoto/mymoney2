@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 
 const SCREENSHOT_DIR = './screenshots';
-const BASE_URL = 'http://localhost:3000';
+const BASE_URL = 'http://localhost:3456';
 
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 

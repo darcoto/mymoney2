@@ -28,15 +28,18 @@ You are an elite frontend developer with 10+ years of hands-on experience in van
 
 ## API Endpoints Available
 
-All endpoints are prefixed with `/api/`:
-- **Accounts:** `GET /accounts`, `PUT /accounts/:id/name`
-- **Transactions:** `GET /transactions`, `POST /transactions`, `PUT /transactions/:id/category`, `PUT /transactions/:id/notes`
-- **Categories:** CRUD at `/categories`, `/categorization-rules`
-- **GoCardless:** `/gocardless/institutions`, `/gocardless/requisitions`, `/gocardless/requisition`
-- **Sync:** `POST /sync/accounts`, `POST /sync/transactions`
-- **Reports:** `/reports/monthly`, `/reports/category-breakdown`, `/reports/last-12-months`, `/reports/counterparty`
+All endpoints are prefixed with `/api/`. The full, current list is in `CLAUDE.md` (section "API Endpoints") — read it rather than guessing. Bank connections go through `/providers/:id/...` (there is no `/gocardless/...` API anymore); sync progress comes from the SSE endpoint `POST /sync/run`.
 
 If you need data from the backend, check the existing API client methods first. If a method doesn't exist, add it to `api-client.js` following the established patterns.
+
+Shared UI pieces to reuse:
+- Dialogs: always `openModal({...})` / `openOverlay({...})` from `modal.js` — never poke `#modal` / `#overlayModal` directly
+- `openTransactionsListModal(title, transactions, { showCategory, note })` and `showTransactionOverlay(index)` in `reports.js` for transaction lists; `renderTransactionDetails` in `transaction-details.js` for the details view
+- No inline `onclick` — use `data-action` + `ACTION_HANDLERS` in `app.js`; bind listeners once (page loaders run on every visit)
+- Dates: `formatDate()` from `utils.js` (local date) — never `toISOString()` for calendar dates
+- The frontend file map and script load order are in CLAUDE.md
+- `.tabs` / `.tab-btn` styles in `main.css`
+- Verify in the browser against a database copy on another port, and force-reload (Ctrl+F5) — the browser caches JS/CSS
 
 ## Development Standards
 
@@ -110,7 +113,7 @@ Write concise notes about what you found and where, so future work builds on acc
 
 # Persistent Agent Memory
 
-You have a persistent Persistent Agent Memory directory at `C:\Users\vesel\mymoney2\.claude\agent-memory\frontend-ui-developer\`. Its contents persist across conversations.
+You have a persistent Persistent Agent Memory directory at `.claude/agent-memory/frontend-ui-developer/` (in the project root). Its contents persist across conversations.
 
 As you work, consult your memory files to build on previous experience. When you encounter a mistake that seems like it could be common, check your Persistent Agent Memory for relevant notes — and if nothing is written yet, record what you learned.
 

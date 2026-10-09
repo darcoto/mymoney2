@@ -17,18 +17,36 @@ class TransactionsPage {
     async init() {
         // Load categories, accounts, and countries for filters
         try {
-            this.categories = await api.getCategories();
-            this.accounts = await api.getAccounts();
-            this.countries = await api.getCountries();
+            [this.categories, this.accounts, this.countries] = await Promise.all([
+                api.getCategories(),
+                api.getAccounts(),
+                api.getCountries()
+            ]);
 
             this.populateFilterDropdowns();
-            this.attachEventListeners();
+            // init() се вика при всяко отваряне на страницата — слушателите се закачат само веднъж
+            if (!this.listenersAttached) {
+                this.attachEventListeners();
+                this.listenersAttached = true;
+            }
         } catch (error) {
             console.error('Error initializing transactions page:', error);
         }
     }
 
     populateFilterDropdowns() {
+        // Запазваме текущия избор при презареждане на списъците
+        const previous = {};
+        ['filterAccount', 'filterCategory', 'filterCountry'].forEach(id => {
+            previous[id] = document.getElementById(id)?.value || '';
+        });
+        const restore = (select) => {
+            const prev = previous[select.id];
+            if (prev && Array.from(select.options).some(o => o.value === prev)) {
+                select.value = prev;
+            }
+        };
+
         // Populate account filter
         const accountSelect = document.getElementById('filterAccount');
         accountSelect.innerHTML = '<option value="">Всички сметки</option>';
@@ -38,6 +56,7 @@ class TransactionsPage {
             option.textContent = account.custom_name || account.name;
             accountSelect.appendChild(option);
         });
+        restore(accountSelect);
 
         // Populate category filter
         const categorySelect = document.getElementById('filterCategory');
@@ -48,6 +67,7 @@ class TransactionsPage {
             option.textContent = category.name;
             categorySelect.appendChild(option);
         });
+        restore(categorySelect);
 
         // Populate country filter
         const countrySelect = document.getElementById('filterCountry');
@@ -59,10 +79,12 @@ class TransactionsPage {
                 option.textContent = `${country.flag || ''} ${country.name || country.code}`.trim();
                 countrySelect.appendChild(option);
             });
+            restore(countrySelect);
         }
     }
 
     attachEventListeners() {
+        document.querySelector('#transactionsTable tbody')?.addEventListener('click', (e) => this.handleTableClick(e));
         document.getElementById('applyFilters').addEventListener('click', () => this.applyFilters());
         document.getElementById('clearFilters').addEventListener('click', () => this.clearFilters());
 
@@ -73,7 +95,19 @@ class TransactionsPage {
 
         // Quick filter uncategorized button
         const quickFilterBtn = document.getElementById('quickFilterUncategorized');
-        quickFilterBtn?.addEventListener('click', () => this.filterUncategorized());
+        quickFilterBtn?.addEventListener('click', (e) => {
+            // Бутонът е в заглавката на филтрите — да не я сгъва/разгъва
+            e.stopPropagation();
+            this.filterUncategorized();
+        });
+
+        // Пагинация (горе и долу): делегиран слушател за бутоните с data-page-index
+        ['transactionsPaginationTop', 'transactionsPagination'].forEach(id => {
+            document.getElementById(id)?.addEventListener('click', (e) => {
+                const btn = e.target.closest('button[data-page-index]');
+                if (btn && !btn.disabled) this.goToPage(Number(btn.dataset.pageIndex));
+            });
+        });
 
         // Filter section toggle
         const filtersToggle = document.getElementById('filtersToggle');
@@ -125,9 +159,7 @@ class TransactionsPage {
                 break;
         }
 
-        // Format dates as YYYY-MM-DD
-        const formatDate = (date) => date.toISOString().split('T')[0];
-
+        // formatDate е глобална (utils.js) и връща локална дата YYYY-MM-DD
         document.getElementById('filterStartDate').value = formatDate(startDate);
         document.getElementById('filterEndDate').value = formatDate(endDate);
     }
@@ -240,11 +272,11 @@ class TransactionsPage {
             const row = document.createElement('tr');
             row.classList.add('transaction-row');
             row.innerHTML = `
-                <td style="white-space: nowrap;">${formatDate(new Date(tx.transaction_date))}</td>
-                <td class="description-cell" data-id="${tx.id}" data-index="${index}" style="cursor: pointer;" title="Кликни за детайли">
+                <td style="white-space: nowrap;">${formatDate(tx.transaction_date)}</td>
+                <td class="description-cell" data-id="${escapeHtml(tx.id)}" data-index="${index}" style="cursor: pointer;" title="Кликни за детайли">
                     <div style="font-weight: 500; display: flex; align-items: center; gap: 6px;">
                         <span class="counterparty-name">${displayName ? escapeHtml(displayName) : '<span class="text-muted">—</span>'}</span>
-                        ${tx.counterparty_name ? `<span class="alias-btn" data-counterparty="${escapeHtml(tx.counterparty_name)}" data-display="${escapeHtml(tx.counterparty_display_name || '')}" onclick="event.stopPropagation(); transactionsPage.editCounterpartyAlias('${escapeHtml(tx.counterparty_name).replace(/'/g, "\\'")}', '${escapeHtml(tx.counterparty_display_name || '').replace(/'/g, "\\'")}')" style="cursor: pointer; font-size: 12px; opacity: 0; transition: opacity 0.2s;" title="Задай синоним">✏️</span>` : ''}
+                        ${tx.counterparty_name ? `<span class="alias-btn" data-counterparty="${escapeHtml(tx.counterparty_name)}" data-display="${escapeHtml(tx.counterparty_display_name || '')}" style="cursor: pointer; font-size: 12px; opacity: 0; transition: opacity 0.2s;" title="Задай синоним">✏️</span>` : ''}
                     </div>
                     <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
                         ${bankName ? `<span style="font-weight: 500;">${escapeHtml(bankName)}</span>` : ''}${bankName && tx.description ? ' · ' : ''}${tx.description ? `<span style="font-style: italic;">${escapeHtml(tx.description)}</span>` : ''}
@@ -260,7 +292,7 @@ class TransactionsPage {
                     ${formatCurrencyExact(tx.amount)}
                 </td>
                 <td style="text-align: center; white-space: nowrap;">
-                    <span class="details-cell" data-id="${tx.id}" data-index="${index}" title="Детайли${tx.notes ? '\n📝 ' + escapeHtml(tx.notes) : ''}" style="cursor: pointer; font-size: 18px;">
+                    <span class="details-cell" data-id="${escapeHtml(tx.id)}" data-index="${index}" title="Детайли${tx.notes ? '\n📝 ' + escapeHtml(tx.notes) : ''}" style="cursor: pointer; font-size: 18px;">
                         ${tx.notes ? '📋📝' : '📋'}
                     </span>
                 </td>
@@ -268,26 +300,9 @@ class TransactionsPage {
             tbody.appendChild(row);
         });
 
-        // Add click handlers for details cells
-        document.querySelectorAll('.details-cell').forEach(cell => {
-            cell.addEventListener('click', () => {
-                const index = parseInt(cell.dataset.index);
-                this.showRawData(cell.dataset.id, index);
-            });
-        });
-
-        document.querySelectorAll('.description-cell').forEach(cell => {
-            cell.addEventListener('click', (e) => {
-                // Don't trigger if clicking on a link or alias button
-                if (e.target.tagName !== 'A' && !e.target.classList.contains('alias-btn')) {
-                    const index = parseInt(cell.dataset.index);
-                    this.showRawData(cell.dataset.id, index);
-                }
-            });
-        });
-
+        // Кликовете се обработват от делегиран слушател на tbody (attachEventListeners)
         // Add hover effect for transaction rows to show/hide icons
-        document.querySelectorAll('.transaction-row').forEach(row => {
+        tbody.querySelectorAll('.transaction-row').forEach(row => {
             row.addEventListener('mouseenter', () => {
                 row.querySelectorAll('.alias-btn').forEach(el => {
                     el.style.opacity = '0.7';
@@ -299,6 +314,22 @@ class TransactionsPage {
                 });
             });
         });
+    }
+
+    // Делегиран обработчик на кликове в таблицата с транзакции (закача се веднъж)
+    handleTableClick(e) {
+        const aliasBtn = e.target.closest('.alias-btn');
+        if (aliasBtn) {
+            e.stopPropagation();
+            this.editCounterpartyAlias(aliasBtn.dataset.counterparty, aliasBtn.dataset.display || '');
+            return;
+        }
+        if (e.target.closest('a')) return;
+
+        const cell = e.target.closest('.details-cell, .description-cell');
+        if (cell) {
+            this.showRawData(cell.dataset.id, parseInt(cell.dataset.index));
+        }
     }
 
     renderPagination() {
@@ -314,19 +345,16 @@ class TransactionsPage {
             return;
         }
 
-        // Button styles with explicit colors
-        const btnStyle = 'padding: 6px 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;';
-        const btnActiveStyle = 'padding: 6px 10px; background: var(--primary-color, #4a90d9); color: white; border: none; border-radius: 4px; cursor: pointer;';
-        const btnDisabledStyle = 'padding: 6px 12px; background: #ccc; color: #666; border: none; border-radius: 4px; cursor: not-allowed;';
+        // Бутон към страница (0-базиран индекс); кликовете се обработват от слушателя в attachEventListeners
+        const pageBtn = (page, label, current = false) =>
+            `<button type="button" class="page-btn${current ? ' page-btn-current' : ''}" data-page-index="${page}">${label}</button>`;
+        const disabledBtn = label => `<button type="button" class="page-btn" disabled>${label}</button>`;
+        const ellipsis = '<span class="page-ellipsis">...</span>';
 
-        let html = '<div style="display: flex; gap: 8px; justify-content: center; align-items: center; padding: 12px 0;">';
+        let html = '<div class="page-nav">';
 
         // Previous button
-        if (this.currentPage === 0) {
-            html += `<button style="${btnDisabledStyle}" disabled>← Предишна</button>`;
-        } else {
-            html += `<button style="${btnStyle}" onclick="transactionsPage.goToPage(${this.currentPage - 1})">← Предишна</button>`;
-        }
+        html += this.currentPage === 0 ? disabledBtn('← Предишна') : pageBtn(this.currentPage - 1, '← Предишна');
 
         // Page numbers
         const maxVisiblePages = 5;
@@ -338,30 +366,21 @@ class TransactionsPage {
         }
 
         if (startPage > 0) {
-            html += `<button style="${btnStyle}" onclick="transactionsPage.goToPage(0)">1</button>`;
-            if (startPage > 1) {
-                html += '<span style="color: #666; padding: 0 4px;">...</span>';
-            }
+            html += pageBtn(0, '1');
+            if (startPage > 1) html += ellipsis;
         }
 
         for (let i = startPage; i < endPage; i++) {
-            const isActive = i === this.currentPage;
-            html += `<button style="${isActive ? btnActiveStyle : btnStyle}" onclick="transactionsPage.goToPage(${i})">${i + 1}</button>`;
+            html += pageBtn(i, i + 1, i === this.currentPage);
         }
 
         if (endPage < totalPages) {
-            if (endPage < totalPages - 1) {
-                html += '<span style="color: #666; padding: 0 4px;">...</span>';
-            }
-            html += `<button style="${btnStyle}" onclick="transactionsPage.goToPage(${totalPages - 1})">${totalPages}</button>`;
+            if (endPage < totalPages - 1) html += ellipsis;
+            html += pageBtn(totalPages - 1, totalPages);
         }
 
         // Next button
-        if (this.currentPage >= totalPages - 1) {
-            html += `<button style="${btnDisabledStyle}" disabled>Следваща →</button>`;
-        } else {
-            html += `<button style="${btnStyle}" onclick="transactionsPage.goToPage(${this.currentPage + 1})">Следваща →</button>`;
-        }
+        html += this.currentPage >= totalPages - 1 ? disabledBtn('Следваща →') : pageBtn(this.currentPage + 1, 'Следваща →');
 
         html += '</div>';
 
@@ -375,65 +394,58 @@ class TransactionsPage {
         document.getElementById('transactionsTable')?.scrollIntoView({ behavior: 'smooth' });
     }
 
-    showRawData(transactionId, index = -1) {
+    // Презарежда списъка и опреснява отворения модал, като пази правилната навигация.
+    // Ако транзакцията е изпаднала от списъка (напр. филтър "Некатегоризирани"), тя остава
+    // показана ("откъсната"): "Следваща" отива към транзакцията, заела нейното място.
+    async reloadAndRefreshModal(transaction, { forceRender = false } = {}) {
+        const previousIndex = this.currentTransactionIndex;
+        const wasDetached = this.detachedTransaction;
+        await this.loadTransactions();
+
+        if (!isModalOpen('tx-details')) return;
+
+        const newIndex = this.transactions.findIndex(t => t.id === transaction.id);
+        if (newIndex >= 0) {
+            if (forceRender || wasDetached || newIndex !== previousIndex) {
+                this.showRawData(null, newIndex);
+            }
+        } else {
+            const position = Math.min(Math.max(previousIndex, 0), this.transactions.length);
+            this.showRawData(null, position, transaction);
+        }
+    }
+
+    showRawData(transactionId, index = -1, detachedTransaction = null) {
         // Find transaction by ID or use index
         let transaction;
-        if (index >= 0 && index < this.transactions.length) {
+        if (detachedTransaction) {
+            // Транзакцията вече не е в списъка; index е мястото, където се е намирала
+            transaction = detachedTransaction;
+            this.currentTransactionIndex = index;
+            this.detachedTransaction = detachedTransaction;
+        } else if (index >= 0 && index < this.transactions.length) {
             transaction = this.transactions[index];
             this.currentTransactionIndex = index;
+            this.detachedTransaction = null;
         } else {
             transaction = this.transactions.find(t => t.id === transactionId);
             this.currentTransactionIndex = this.transactions.findIndex(t => t.id === transactionId);
+            this.detachedTransaction = null;
         }
         if (!transaction) return;
+        this.currentTransactionId = transaction.id;
+        const isDetached = !!this.detachedTransaction;
 
-        // Find account info
         const account = this.accounts.find(a => a.id === transaction.account_id);
-        const accountName = account ? (account.custom_name || account.name) : 'Неизвестна';
-        const bankName = account?.institution_name || 'Неизвестна';
 
-        const modal = document.getElementById('modal');
-        const modalContent = modal.querySelector('.modal-content');
-        modalContent.style.maxWidth = '1100px';
-
-        // Navigation buttons for modal footer
+        // Навигация Предишна/Следваща
         const hasPrev = this.currentTransactionIndex > 0;
-        const hasNext = this.currentTransactionIndex < this.transactions.length - 1;
+        const hasNext = isDetached
+            ? this.currentTransactionIndex < this.transactions.length
+            : this.currentTransactionIndex < this.transactions.length - 1;
+        const navStyle = enabled => enabled ? '' : 'opacity: 0.5; cursor: not-allowed;';
 
-        document.getElementById('modalTitle').textContent = `Детайли на транзакция (${this.currentTransactionIndex + 1}/${this.transactions.length})`;
-
-        // Update footer with navigation buttons
-        const modalFooter = modal.querySelector('.modal-footer');
-        modalFooter.style.justifyContent = 'space-between';
-        modalFooter.innerHTML = `
-            <button id="modalPrevTx" class="btn btn-secondary" ${hasPrev ? '' : 'disabled'} style="${hasPrev ? '' : 'opacity: 0.5; cursor: not-allowed;'}">← Предишна</button>
-            <button id="modalCancel" class="btn btn-secondary">Затвори</button>
-            <button id="modalNextTx" class="btn btn-secondary" ${hasNext ? '' : 'disabled'} style="${hasNext ? '' : 'opacity: 0.5; cursor: not-allowed;'}">Следваща →</button>
-        `;
-
-        let rawDataContent = 'Няма налични raw данни.';
-        if (transaction.raw_data) {
-            try {
-                const rawData = JSON.parse(transaction.raw_data);
-                rawDataContent = JSON.stringify(rawData, null, 2);
-            } catch (e) {
-                rawDataContent = transaction.raw_data;
-            }
-        }
-
-        // Show exact amount (no rounding) in detail view
-        let amountDisplay = formatCurrencyExact(transaction.amount);
-        if (transaction.original_amount && transaction.original_currency) {
-            amountDisplay += ` <span style="color: var(--text-muted); font-size: 12px;">(оригинал: ${transaction.original_amount} ${transaction.original_currency})</span>`;
-        }
-
-        // Prepare Google search query (remove "BGR " prefix if present)
-        let googleSearchQuery = transaction.counterparty_name || '';
-        if (googleSearchQuery.startsWith('BGR ')) {
-            googleSearchQuery = googleSearchQuery.substring(4);
-        }
-
-        // Build category selection HTML
+        // Избор на категория (десен панел)
         const renderCategoryBubbles = (cats, title) => {
             if (cats.length === 0) return '';
             return `
@@ -460,70 +472,55 @@ class TransactionsPage {
         const incomeCategories = this.categories.filter(c => c.type === 'income');
         const transferCategories = this.categories.filter(c => c.type === 'transfer');
 
-        document.getElementById('modalBody').innerHTML = `
-            <div style="display: flex; gap: 24px;">
-                <div style="flex: 1; min-width: 0;">
-                    <h4 style="margin: 0 0 12px 0; color: var(--primary-color);">Основна информация</h4>
-                    <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; width: 110px; border: 1px solid #e0e0e0;"><strong>ID:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-family: monospace; font-size: 10px;">${escapeHtml(transaction.id)}</td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Контрагент:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;"><span style="color: var(--primary-color); font-weight: 600; font-size: 14px;">${escapeHtml(transaction.counterparty_name || '-')}</span> ${transaction.counterparty_name ? `<a href="https://www.google.com/search?q=${encodeURIComponent(googleSearchQuery)}" target="_blank" rel="noopener" style="text-decoration: none; margin-left: 6px;" title="Търси в Google">🔍</a>` : ''}</td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Сума:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-weight: 600; ${transaction.amount >= 0 ? 'color: var(--primary-color);' : 'color: var(--danger-color);'}">${amountDisplay}</td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Описание:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(transaction.description || '-')}</td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Банка:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(bankName)}</td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Сметка:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${escapeHtml(accountName)} <span style="color: #888; font-size: 11px;">(${escapeHtml(account?.iban || '')})</span></td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Дата:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.transaction_date}</td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Дата осчетов.:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.booking_date || '-'}</td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Държава:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">
-                            <select id="modalCountrySelect" style="padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; min-width: 150px;">
-                                <option value="">-- Без държава --</option>
-                                ${this.countries.map(c => `<option value="${c.code}" ${transaction.country === c.code ? 'selected' : ''}>${c.flag || ''} ${c.name || c.code}</option>`).join('')}
-                            </select>
-                        </td></tr>
-                        <tr><td style="padding: 6px 10px; background: #f5f5f5; border: 1px solid #e0e0e0;"><strong>Създадена:</strong></td><td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${transaction.created_at || '-'}</td></tr>
-                    </table>
-
-                    <div style="display: flex; align-items: center; gap: 12px; margin: 16px 0 12px 0;">
-                        <h4 style="margin: 0; color: var(--primary-color);">Raw данни от GoCardless API</h4>
-                        <button type="button" id="copyRawDataBtn" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 10px;">Копирай</button>
-                        <button type="button" id="reprocessBtn" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 10px;">Преизчисли</button>
-                    </div>
-                    <pre id="rawDataPre" style="background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; max-height: 200px; overflow: auto; font-size: 11px; white-space: pre-wrap; line-height: 1.3;">${escapeHtml(rawDataContent)}</pre>
-                </div>
-                <div style="width: 520px; flex-shrink: 0;">
-                    <h4 style="margin: 0 0 12px 0; color: var(--primary-color);">Категория</h4>
-                    <div style="background: #f9f9f9; padding: 12px; border-radius: 8px; border: 1px solid #e0e0e0;">
-                        <div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #e0e0e0;">
-                            <strong>Текуща:</strong>
-                            ${transaction.category_name
-                                ? `<span class="category-badge" style="background-color: ${transaction.category_color}">${escapeHtml(transaction.category_name)}</span>`
-                                : '<span class="text-muted">Некатегоризирана</span>'}
-                        </div>
+        const sidePanelHtml = `
+                    <div style="background: #f9f9f9; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color);">
                         ${renderCategoryBubbles(expenseCategories, '💸 Разходи')}
                         ${renderCategoryBubbles(incomeCategories, '💰 Приходи')}
                         ${renderCategoryBubbles(transferCategories, '🔄 Трансфери')}
-                        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #e0e0e0;">
+                        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color);">
                             <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer;">
                                 <input type="checkbox" id="modalApplyToAll" checked style="width: 16px; height: 16px;">
                                 <span>Приложи за всички транзакции с този контрагент</span>
                             </label>
                         </div>
-                    </div>
+                    </div>`;
 
-                    <h4 style="margin: 16px 0 12px 0; color: var(--primary-color);">📝 Бележки</h4>
-                    <textarea id="modalNotesText" class="input" rows="3" style="resize: vertical; font-size: 13px;" placeholder="Добави бележка...">${escapeHtml(transaction.notes || '')}</textarea>
-                </div>
-            </div>
-        `;
+        const countryHtml = `
+                            <select id="modalCountrySelect" style="padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; min-width: 150px;">
+                                <option value="">-- Без държава --</option>
+                                ${this.countries.map(c => `<option value="${escapeHtml(c.code)}" ${transaction.country === c.code ? 'selected' : ''}>${escapeHtml(`${c.flag || ''} ${c.name || c.code}`)}</option>`).join('')}
+                            </select>`;
 
-        modal.classList.add('active');
+        // Повторно отваряне при навигация само пречертава модала (без onClose)
+        openModal({
+            key: 'tx-details',
+            title: isDetached
+                ? 'Детайли на транзакция'
+                : `Детайли на транзакция (${this.currentTransactionIndex + 1}/${this.transactions.length})`,
+            body: renderTransactionDetails(transaction, {
+                account,
+                countryHtml,
+                sidePanelHtml,
+                notesEditable: true,
+                rawActionsHtml: '<button type="button" id="reprocessBtn" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 10px;">Преизчисли</button>',
+                activeTab: this.detailsTab || 'details'
+            }),
+            footer: `
+            <button type="button" id="modalPrevTx" class="btn btn-secondary" ${hasPrev ? '' : 'disabled'} style="${navStyle(hasPrev)}">← Предишна</button>
+            <button type="button" id="modalNextTx" class="btn btn-secondary" ${hasNext ? '' : 'disabled'} style="${navStyle(hasNext)}">Следваща →</button>
+            <button type="button" class="btn btn-secondary" data-modal-close>Затвори</button>
+        `,
+            footerAlign: 'space-between',
+            maxWidth: '1100px',
+            className: 'modal-compact',
+            autofocus: false
+        });
 
-        // Copy raw data button
-        document.getElementById('copyRawDataBtn')?.addEventListener('click', () => {
-            navigator.clipboard.writeText(rawDataContent).then(() => {
-                showNotification('Raw данните са копирани', 'success');
-            }).catch(() => {
-                showNotification('Грешка при копиране', 'error');
-            });
+        const modalBody = document.getElementById('modalBody');
+
+        // Табове (избраният таб се запазва при навигация) + „Копирай“
+        bindTransactionDetails(modalBody, transaction, {
+            onTabChange: tab => { this.detailsTab = tab; }
         });
 
         // Reprocess button - re-run parsing rules and show preview
@@ -546,7 +543,7 @@ class TransactionsPage {
                     original_amount: 'Оригинална сума',
                     original_currency: 'Оригинална валута',
                     transaction_date: 'Дата',
-                    booking_date: 'Дата осчетов.',
+                    booking_date: 'Дата(осч)',
                     country: 'Държава',
                     category_id: 'Категория'
                 };
@@ -557,8 +554,8 @@ class TransactionsPage {
                     if (field === 'category_id') {
                         const name = extra?.name;
                         const color = extra?.color;
-                        if (name) return `<span class="category-badge" style="background-color: ${color}">${escapeHtml(name)}</span>`;
-                        return '<span class="text-muted">Некатегоризирана</span>';
+                        if (name) return `<span class="category-badge" style="background-color: ${escapeHtml(color)}">${escapeHtml(name)}</span>`;
+                        return '<span style="color: var(--danger-color); font-weight: 600;">Некатегоризирана</span>';
                     }
                     return escapeHtml(String(val));
                 };
@@ -567,73 +564,54 @@ class TransactionsPage {
                     const currentVal = formatVal(field, info.current, { name: info.currentName, color: info.currentColor });
                     const newVal = formatVal(field, info.new, { name: info.newName, color: info.newColor });
                     const changed = String(info.current ?? '') !== String(info.new ?? '');
-                    const bgStyle = changed ? 'background: #fff8e1;' : '';
                     return `
-                        <tr style="${bgStyle}">
-                            <td style="padding: 6px 10px; font-weight: 600; border: 1px solid #e0e0e0; white-space: nowrap;">${fieldLabels[field] || field}</td>
-                            <td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${currentVal}</td>
-                            <td style="padding: 6px 10px; border: 1px solid #e0e0e0;">${newVal}</td>
-                            <td style="padding: 6px 10px; border: 1px solid #e0e0e0; text-align: center;">${changed ? '⚠️' : '✓'}</td>
+                        <tr${changed ? ' class="row-changed"' : ''}>
+                            <td style="font-weight: 600; white-space: nowrap;">${fieldLabels[field] || escapeHtml(field)}</td>
+                            <td>${currentVal}</td>
+                            <td>${newVal}</td>
+                            <td class="text-center">${changed ? '⚠️' : '✓'}</td>
                         </tr>
                     `;
                 }).join('');
 
-                const overlayModal = document.getElementById('overlayModal');
-                const overlayContent = overlayModal.querySelector('.modal-content');
-                overlayContent.style.maxWidth = '800px';
-
-                document.getElementById('overlayModalTitle').textContent = 'Преизчисляване на транзакция';
-                document.getElementById('overlayModalBody').innerHTML = `
+                openOverlay({
+                    title: 'Преизчисляване на транзакция',
+                    maxWidth: '800px',
+                    body: `
                     <p style="margin: 0 0 12px 0; color: var(--text-secondary); font-size: 13px;">Маркираните в жълто полета ще бъдат променени.</p>
                     <div class="table-responsive">
-                        <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
+                        <table class="detail-table">
                             <thead>
-                                <tr style="background: #f5f5f5;">
-                                    <th style="padding: 8px 10px; border: 1px solid #e0e0e0; text-align: left;">Поле</th>
-                                    <th style="padding: 8px 10px; border: 1px solid #e0e0e0; text-align: left;">Текуща стойност</th>
-                                    <th style="padding: 8px 10px; border: 1px solid #e0e0e0; text-align: left;">Нова стойност</th>
-                                    <th style="padding: 8px 10px; border: 1px solid #e0e0e0; text-align: center; width: 40px;"></th>
+                                <tr>
+                                    <th>Поле</th>
+                                    <th>Текуща стойност</th>
+                                    <th>Нова стойност</th>
+                                    <th class="text-center" style="width: 40px;"></th>
                                 </tr>
                             </thead>
                             <tbody>${rows}</tbody>
                         </table>
                     </div>
-                `;
-
-                // Replace footer with Apply + Cancel
-                const overlayFooter = overlayModal.querySelector('.modal-footer');
-                overlayFooter.innerHTML = `
-                    <button id="overlayModalClose" class="btn btn-secondary">Отказ</button>
-                    <button id="overlayModalApply" class="btn btn-primary">Приложи промените</button>
-                `;
-
-                overlayModal.classList.add('active');
-
-                const closeOverlay = () => {
-                    overlayContent.style.maxWidth = '';
-                    overlayFooter.innerHTML = '<button id="overlayModalClose" class="btn btn-secondary">Затвори</button>';
-                    overlayModal.classList.remove('active');
-                };
-
-                document.getElementById('overlayModalClose').onclick = closeOverlay;
-                document.querySelector('.overlay-modal-close').onclick = closeOverlay;
-                overlayModal.onclick = (e) => { if (e.target === overlayModal) closeOverlay(); };
-
-                document.getElementById('overlayModalApply').onclick = async () => {
-                    try {
-                        showLoader();
-                        await api.reprocessTransaction(transaction.id, true);
-                        hideLoader();
-                        closeOverlay();
-                        showNotification('Транзакцията е актуализирана', 'success');
-                        // Refresh the transaction detail modal
-                        this.showRawData(null, this.currentTransactionIndex);
-                        await this.loadTransactions();
-                    } catch (err) {
-                        hideLoader();
-                        showNotification('Грешка: ' + err.message, 'error');
+                `,
+                    footer: `
+                    <button type="button" class="btn btn-secondary" data-modal-close>Отказ</button>
+                    <button type="button" class="btn btn-primary" data-modal-save>Приложи промените</button>
+                `,
+                    onSave: async () => {
+                        try {
+                            showLoader();
+                            await api.reprocessTransaction(transaction.id, true);
+                            closeOverlay();
+                            showNotification('Транзакцията е актуализирана', 'success');
+                            // Refresh the list and the transaction detail modal
+                            await this.reloadAndRefreshModal(transaction, { forceRender: true });
+                        } catch (err) {
+                            showNotification('Грешка: ' + err.message, 'error');
+                        } finally {
+                            hideLoader();
+                        }
                     }
-                };
+                });
             } catch (error) {
                 hideLoader();
                 showNotification('Грешка при преизчисляване: ' + error.message, 'error');
@@ -641,7 +619,7 @@ class TransactionsPage {
         });
 
         // Add category button handlers
-        document.querySelectorAll('.modal-category-btn').forEach(btn => {
+        modalBody.querySelectorAll('.modal-category-btn').forEach(btn => {
             btn.addEventListener('click', async () => {
                 const categoryId = parseInt(btn.dataset.categoryId);
                 const applyToAll = document.getElementById('modalApplyToAll')?.checked;
@@ -650,8 +628,10 @@ class TransactionsPage {
                     showLoader();
                     await api.updateTransactionCategory(transaction.id, categoryId);
 
+                    let updatedCount = 0;
                     if (applyToAll && transaction.counterparty_name) {
-                        await api.categorizeByCounterparty(transaction.counterparty_name, categoryId);
+                        const result = await api.categorizeByCounterparty(transaction.counterparty_name, categoryId);
+                        updatedCount = Number(result?.updatedCount) || 0;
                     }
 
                     // Update local transaction data
@@ -660,13 +640,15 @@ class TransactionsPage {
                     transaction.category_name = cat?.name;
                     transaction.category_color = cat?.color;
 
-                    // Refresh the modal content
-                    this.showRawData(null, this.currentTransactionIndex);
+                    // Refresh the list and the modal content
+                    await this.reloadAndRefreshModal(transaction, { forceRender: true });
 
-                    // Refresh the transaction list
-                    await this.loadTransactions();
-
-                    showNotification('Категорията е записана', 'success');
+                    showNotification(
+                        updatedCount > 0
+                            ? `Категорията е записана (+${updatedCount} със същия контрагент)`
+                            : 'Категорията е записана',
+                        'success'
+                    );
                 } catch (error) {
                     showNotification('Грешка при записване: ' + error.message, 'error');
                 } finally {
@@ -678,16 +660,22 @@ class TransactionsPage {
         // Add navigation button handlers
         document.getElementById('modalPrevTx')?.addEventListener('click', () => {
             if (this.currentTransactionIndex > 0) {
+                // и при "откъсната" транзакция index-1 е предишната в списъка
                 this.showRawData(null, this.currentTransactionIndex - 1);
             }
         });
         document.getElementById('modalNextTx')?.addEventListener('click', () => {
-            if (this.currentTransactionIndex < this.transactions.length - 1) {
+            if (this.detachedTransaction) {
+                // Следващата транзакция вече е на мястото на текущата
+                if (this.currentTransactionIndex < this.transactions.length) {
+                    this.showRawData(null, this.currentTransactionIndex);
+                }
+            } else if (this.currentTransactionIndex < this.transactions.length - 1) {
                 this.showRawData(null, this.currentTransactionIndex + 1);
             }
         });
 
-        // Auto-save notes on blur
+        // Auto-save notes on blur (closeModal() маха фокуса преди затваряне, така че blur винаги се изпълнява)
         document.getElementById('modalNotesText')?.addEventListener('blur', async (e) => {
             const notes = e.target.value;
             // Only save if notes changed
@@ -696,7 +684,12 @@ class TransactionsPage {
             try {
                 await api.updateTransactionNotes(transaction.id, notes);
                 transaction.notes = notes;
-                await this.loadTransactions();
+                if (this.currentTransactionId === transaction.id) {
+                    await this.reloadAndRefreshModal(transaction);
+                } else {
+                    // Междувременно е отворена друга транзакция (Предишна/Следваща) — не я подменяме
+                    await this.loadTransactions();
+                }
                 showNotification('Бележките са запазени', 'success');
             } catch (error) {
                 showNotification('Грешка при запазване: ' + error.message, 'error');
@@ -709,63 +702,12 @@ class TransactionsPage {
             try {
                 await api.updateTransactionCountry(transaction.id, country);
                 transaction.country = country;
-                await this.loadTransactions();
+                await this.reloadAndRefreshModal(transaction);
                 showNotification('Държавата е записана', 'success');
             } catch (error) {
                 showNotification('Грешка при запазване: ' + error.message, 'error');
             }
         });
-
-        const closeModal = () => {
-            modalContent.style.maxWidth = '';
-            // Restore original footer
-            modalFooter.style.justifyContent = 'flex-end';
-            modalFooter.innerHTML = `
-                <button id="modalCancel" class="btn btn-secondary">Отказ</button>
-                <button id="modalSave" class="btn btn-primary">Запази</button>
-            `;
-            modal.classList.remove('active');
-        };
-
-        document.getElementById('modalCancel').onclick = closeModal;
-        document.querySelector('.modal-close').onclick = closeModal;
-    }
-
-    async editNotes(transactionId) {
-        const transaction = this.transactions.find(t => t.id === transactionId);
-        if (!transaction) return;
-
-        const modal = document.getElementById('modal');
-        document.getElementById('modalTitle').textContent = 'Редактиране на бележки';
-        document.getElementById('modalSave').style.display = 'inline-block';
-
-        document.getElementById('modalBody').innerHTML = `
-            <div class="filter-group">
-                <label>Бележки</label>
-                <textarea id="editNotesText" class="input" rows="4" style="resize: vertical;">${escapeHtml(transaction.notes || '')}</textarea>
-            </div>
-        `;
-
-        modal.classList.add('active');
-
-        const saveHandler = async () => {
-            const notes = document.getElementById('editNotesText').value;
-            try {
-                showLoader();
-                await api.updateTransactionNotes(transactionId, notes);
-                await this.loadTransactions();
-                modal.classList.remove('active');
-                showNotification('Бележките са обновени', 'success');
-            } catch (error) {
-                showNotification('Грешка при обновяване на бележки', 'error');
-            } finally {
-                hideLoader();
-            }
-        };
-
-        document.getElementById('modalSave').onclick = saveHandler;
-        document.getElementById('modalCancel').onclick = () => modal.classList.remove('active');
-        document.querySelector('.modal-close').onclick = () => modal.classList.remove('active');
     }
 
     async editCounterpartyAlias(originalName, currentDisplayName) {

@@ -99,6 +99,13 @@
     border-color: var(--primary-color);
 }
 
+/* Подкатегория: отстъп + лява лента (цветът на родителя се задава от JS) */
+.category-item-child {
+    margin-left: 24px;
+    padding-left: 12px;
+    border-left-width: 3px;
+}
+
 .category-info {
     display: flex;
     align-items: center;
@@ -213,20 +220,6 @@
 /* Reports page */
 #reportResults .summary-cards {
     margin-top: 24px;
-}
-
-/* Bank selection */
-.bank-option {
-    transition: all 0.2s;
-}
-
-.bank-option:hover {
-    transform: translateX(4px);
-    border-color: var(--primary-color) !important;
-}
-
-.bank-option:active {
-    transform: scale(0.98);
 }
 
 /* Sync status messages */

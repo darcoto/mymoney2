@@ -22,6 +22,29 @@ router.get('/monthly', async (req, res) => {
   }
 });
 
+// Транзакциите зад ред от справка (по контрагент или по сметка) — същите филтри като /monthly
+router.get('/transactions', async (req, res) => {
+  try {
+    const { year, month, category_id, counterparty, account_id, country } = req.query;
+
+    let types = req.query.types;
+    if (!types) {
+      types = null;
+    } else if (!Array.isArray(types)) {
+      types = [types];
+    }
+
+    const transactions = await database.getReportTransactions(year, month, types, category_id, {
+      counterparty,
+      accountId: account_id,
+      country
+    });
+    res.json(transactions);
+  } catch (error) {
+    apiError(res, error);
+  }
+});
+
 router.get('/last-12-months', async (req, res) => {
   try {
     const report = await database.getLast12MonthsReport();
