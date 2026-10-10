@@ -1,0 +1,33 @@
+# systemd услуга за MyMoney2 — работи постоянно и се рестартира при срив.
+# Инсталация: виж „Инсталация на Linux сървър“ в README.md
+#
+#   sudo cp deploy/mymoney2.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mymoney2
+#   journalctl -u mymoney2 -f        # логове (подробните са в data/app.log)
+
+[Unit]
+Description=MyMoney2 - лични финанси
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mymoney
+Group=mymoney
+WorkingDirectory=/opt/mymoney2
+Environment=NODE_ENV=production
+Environment=PORT=3456
+ExecStart=/usr/bin/node backend/server.js
+Restart=always
+RestartSec=5
+
+# Ограничения: приложението пише само в data/ (база, архиви, логове)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/mymoney2/data
+
+[Install]
+WantedBy=multi-user.target

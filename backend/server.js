@@ -18,6 +18,12 @@ const accountsRouter = require('./routes/accounts');
 const transactionsRouter = require('./routes/transactions');
 const { categoryRouter, rulesRouter } = require('./routes/categories');
 const reportsRouter = require('./routes/reports');
+const { scheduleRouter, telegramRouter, debugRouter } = require('./routes/automation');
+const apiDebug = require('./api-debug');
+const backup = require('./backup');
+const scheduler = require('./scheduler');
+const telegram = require('./telegram');
+const syncService = require('./sync-service');
 const { apiError } = require('./routes/helpers');
 
 const app = express();
@@ -38,6 +44,11 @@ providerRegistry.registerProvider('enablebanking', EnableBankingProvider);
 database.initialize()
   .then(() => {
     console.log('Database initialized successfully');
+    // След всяка синхронизация — известия за новите транзакции
+    syncService.onAfterSync(() => telegram.notifyNewTransactions());
+    apiDebug.load().catch(err => logger.error('[API debug] Load failed:', err.message));
+    scheduler.start();
+    telegram.start().catch(err => logger.error('[Telegram] Start failed:', err.message));
   })
   .catch((err) => {
     console.error('Failed to initialize database:', err);
@@ -71,6 +82,9 @@ app.use('/api/transactions', transactionsRouter);
 app.use('/api/categories', categoryRouter);
 app.use('/api/categorization-rules', rulesRouter);
 app.use('/api/reports', reportsRouter);
+app.use('/api/schedule', scheduleRouter);
+app.use('/api/telegram', telegramRouter);
+app.use('/api/debug', debugRouter);
 
 // Countries
 app.get('/api/countries', async (req, res) => {
@@ -151,28 +165,12 @@ app.get('/api/logs', async (req, res) => {
 // Backup
 app.post('/api/backup', async (req, res) => {
   try {
-    const dbPath = config.databasePath || './data/finance.db';
-    const backupDir = path.join(path.dirname(dbPath), 'backups');
-    if (!fs.existsSync(backupDir)) {
-      fs.mkdirSync(backupDir, { recursive: true });
-    }
-    const now = new Date();
-    const dateStr = now.toISOString().split('T')[0];
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const dbName = path.basename(dbPath, '.db');
-    const backupPath = path.join(backupDir, `${dbName}_backup_${dateStr}_${hours}${minutes}.db`);
-
-    if (!fs.existsSync(dbPath)) {
-      return res.status(404).json({ error: 'Database file not found' });
-    }
-
-    fs.copyFileSync(dbPath, backupPath);
-
+    // VACUUM INTO — последователно копие, дори докато приложението пише в базата
+    const result = await backup.createBackup('manual');
     res.json({
       success: true,
-      backupPath: backupPath,
-      message: `Backup created: ${path.basename(backupPath)}`
+      backupPath: path.relative(process.cwd(), result.path),
+      message: `Backup created: ${result.file}`
     });
   } catch (error) {
     apiError(res, error);
@@ -224,7 +222,7 @@ app.use((err, req, res, next) => {
 
 // Start server
 app.listen(config.port, () => {
-  console.log(`MyMoney2 server running on http://localhost:${config.port}`);
+  console.log(`MyMoney2 server running on http://localhost:${config.port} (all network interfaces)`);
   console.log(`Database: ${config.databaseName} (${config.databasePath})`);
   console.log(`Environment: ${config.nodeEnv}`);
 });

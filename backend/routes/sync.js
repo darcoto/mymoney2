@@ -4,19 +4,7 @@ const database = require('../database');
 const logger = require('../logger');
 const providerRegistry = require('../providers/provider-registry');
 const { apiError } = require('./helpers');
-const { reconcileImportedTransactions } = require('../transaction-matching');
-
-// След всяка синхронизация: транзакциите, които вече са били импортирани от файл, се обединяват
-// с банковите (остава банковият запис, категорията и бележките се пренасят); Revolut прехвърлянията
-// към джоба отиват в правилната сметка; блокираните суми по карти на ДСК се премахват
-async function reconcileSafely() {
-  try {
-    return await reconcileImportedTransactions({ dryRun: false });
-  } catch (error) {
-    logger.error('Post-sync reconcile failed:', error.message);
-    return null;
-  }
-}
+const { runSync, reconcileSafely } = require('../sync-service');
 
 router.post('/accounts', async (req, res) => {
   try {
@@ -116,82 +104,18 @@ router.post('/run', async (req, res) => {
   res.flushHeaders();
 
   const send = (msg) => {
-    if (!res.writableEnded) res.write(`data: ${JSON.stringify(msg)}\n\n`);
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(msg)}
+
+`);
   };
 
   try {
-    const configuredProviders = await providerRegistry.getConfiguredProviders();
-
-    if (configuredProviders.length === 0) {
-      send({ type: 'error', text: 'Няма конфигурирани провайдери' });
-      res.end();
-      return;
-    }
-
-    let totalAccountsSynced = 0;
-    let totalTxSynced = 0;
-
-    // --- Sync accounts ---
-    if (mode === 'accounts' || mode === 'both') {
-      for (const provider of configuredProviders) {
-        send({ type: 'step', icon: '🔄', text: `${provider.name}: зарежда сметки...` });
-        try {
-          const accounts = await provider.syncAllAccounts();
-          totalAccountsSynced += accounts.length;
-          send({ type: 'step', icon: '✅', text: `${provider.name}: ${accounts.length} сметки синхронизирани` });
-        } catch (error) {
-          send({ type: 'step', icon: '❌', text: `${provider.name}: ${error.message}` });
-        }
-      }
-    }
-
-    // --- Sync transactions ---
-    if (mode === 'transactions' || mode === 'both') {
-      const accounts = await database.getAllAccounts();
-      const providerMap = {};
-      for (const p of configuredProviders) { providerMap[p.id] = p; }
-
-      const syncableAccounts = accounts.filter(a => a.id !== 'CASH');
-
-      if (syncableAccounts.length === 0) {
-        send({ type: 'step', icon: '⚠️', text: 'Няма сметки за синхронизация на транзакции' });
-      }
-
-      for (const account of syncableAccounts) {
-        const provider = providerMap[account.provider_id]
-          || configuredProviders.find(p => p.type === 'gocardless');
-        if (!provider) continue;
-
-        const name = account.custom_name || account.name;
-        send({ type: 'step', icon: '🔄', text: `${name}...` });
-
-        try {
-          const count = await provider.syncAccountTransactions(account.id);
-          totalTxSynced += count;
-          const icon = count > 0 ? '✅' : '➖';
-          send({ type: 'step', icon, text: `${name}: ${count} нови транзакции` });
-        } catch (error) {
-          send({ type: 'step', icon: '❌', text: `${name}: ${error.message}` });
-        }
-      }
-
-      const reconciled = await reconcileSafely();
-      if (reconciled) {
-        if (reconciled.duplicatesMerged > 0) {
-          send({ type: 'step', icon: '🔁', text: `${reconciled.duplicatesMerged} транзакции, импортирани по-рано от файл, обединени с банковите` });
-        }
-        const moved = reconciled.pocketTransfersMoved + reconciled.importedMoved;
-        if (moved > 0) {
-          send({ type: 'step', icon: '🔀', text: `Revolut: ${moved} транзакции преместени в правилната сметка (джоб)` });
-        }
-        if (reconciled.cardHoldsRemoved > 0) {
-          send({ type: 'step', icon: '💳', text: `ДСК: ${reconciled.cardHoldsRemoved} блокирани суми по карти премахнати` });
-        }
-      }
-    }
-
-    send({ type: 'done', accountsSynced: totalAccountsSynced, transactionsSynced: totalTxSynced, mode });
-
+    const result = await runSync({
+      mode: mode || 'both',
+      trigger: 'manual',
+      onStep: ({ icon, text }) => send({ type: 'step', icon, text })
+    });
+    send({ type: 'done', accountsSynced: result.accountsSynced, transactionsSynced: result.transactionsSynced, mode });
   } catch (error) {
     logger.error('Sync /run error:', error.message);
     send({ type: 'error', text: error.message });

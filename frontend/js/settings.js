@@ -36,6 +36,9 @@ async function loadSettingsPage() {
         const accounts = await api.getAccounts();
         renderAccountsList(accounts, providers);
 
+        // График и Telegram (не спират останалите настройки при грешка)
+        loadAutomationSettings();
+
         // Load version
         try {
             const versionData = await api.getVersion();
@@ -527,7 +530,7 @@ async function reconcileImports() {
 
     const holdsRemoved = preview.cardHoldsRemoved || 0;
     const feesFixed = preview.feesFixed || 0;
-    const total = preview.pocketTransfersMoved + preview.importedMoved + preview.duplicatesMerged + holdsRemoved + feesFixed;
+    const total = preview.importedMoved + preview.duplicatesMerged + holdsRemoved + feesFixed;
     if (total === 0) {
         showNotification('Няма дубликати и грешно разпределени транзакции', 'success');
         return;
@@ -545,7 +548,6 @@ async function reconcileImports() {
         <ul class="summary-list">
             <li>🔁 Дубликати за обединяване: <strong>${preview.duplicatesMerged}</strong>
                 — остава записът от банката, категорията и бележките от файла се пренасят</li>
-            <li>🔀 Прехвърляния към джоб в Revolut за преместване: <strong>${preview.pocketTransfersMoved}</strong></li>
             <li>🔀 Импортирани от Revolut „Спестявания“ в грешна сметка: <strong>${preview.importedMoved}</strong></li>
             <li>💳 Блокирани суми по карти на ДСК (записани с плюс) за премахване: <strong>${holdsRemoved}</strong>
                 — осчетоводеното плащане остава${preview.cardHoldsUnmatched ? `; още ${preview.cardHoldsUnmatched} без намерено плащане остават непроменени` : ''}</li>
@@ -571,7 +573,7 @@ async function reconcileImports() {
                 const result = await api.reconcileImports(false);
                 closeModal();
                 showNotification(
-                    `Обединени ${result.duplicatesMerged} дубликата, преместени ${result.pocketTransfersMoved + result.importedMoved} транзакции, премахнати ${result.cardHoldsRemoved || 0} блокирани суми, поправени ${result.feesFixed || 0} суми`,
+                    `Обединени ${result.duplicatesMerged} дубликата, преместени ${result.importedMoved} транзакции, премахнати ${result.cardHoldsRemoved || 0} блокирани суми, поправени ${result.feesFixed || 0} суми`,
                     'success'
                 );
                 refreshCurrentPage();

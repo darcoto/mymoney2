@@ -882,6 +882,33 @@
 
             <div class="card">
                 <div class="card-header">
+                    <h3>Автоматизация</h3>
+                </div>
+                <div class="card-body" id="automationSettings">
+                    <p class="text-muted">Зареждане...</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Telegram</h3>
+                </div>
+                <div class="card-body" id="telegramSettings">
+                    <p class="text-muted">Зареждане...</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3>Дебъг</h3>
+                </div>
+                <div class="card-body" id="debugSettings">
+                    <p class="text-muted">Зареждане...</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
                     <h3>Категоризиране</h3>
                 </div>
                 <div class="card-body">
@@ -896,7 +923,7 @@
                     <h3>Дубликати от импорт</h3>
                 </div>
                 <div class="card-body">
-                    <p class="text-muted" style="margin-bottom: 12px;">Намира транзакции, импортирани от файл, които са влезли и от банката, и ги обединява (запазват се категорията и бележките). Поправя и прехвърлянията към джобове в Revolut и премахва блокираните суми по карти на ДСК, записани като отделни транзакции.</p>
+                    <p class="text-muted" style="margin-bottom: 12px;">Намира транзакции, импортирани от файл, които са влезли и от банката, и ги обединява (запазват се категорията и бележките). Премества импортираните от Revolut „Спестявания“ в джоба, поправя старите импорти без такса и премахва блокираните суми по карти на ДСК.</p>
                     <button id="reconcileImportsBtn" class="btn btn-secondary">🔁 Провери за дубликати</button>
                 </div>
             </div>
@@ -1028,6 +1055,7 @@
     <script src="/js/reports.js"></script>
     <script src="/js/insights.js"></script>
     <script src="/js/settings.js"></script>
+    <script src="/js/automation.js"></script>
     <script src="/js/sync.js"></script>
     <script src="/js/app.js"></script>
 </body>

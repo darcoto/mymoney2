@@ -4,8 +4,8 @@
  * - Дубликати: транзакция от файл, която вече е влязла през синхронизацията с банката
  *   (или от друг файл с различен формат), се разпознава и не се импортира повторно.
  *   Revolut: сума + баланс след транзакцията / точен час; ДСК: дата + сума + контрагент.
- * - Revolut джобове (Vault/„Спестявания“): GoCardless връща прехвърлянията между основната
- *   сметка и джоба в „чуждата“ сметка — fixRevolutPocketTransfers() ги премества.
+ * - Revolut: двете страни на превод между собствени сметки (основна ↔ джоб, USD ↔ EUR) имат
+ *   един и същ transactionId — ключът е internalTransactionId (виж GoCardless провайдъра).
  * - reconcileImportedTransactions(): почистване на вече натрупани дубликати.
  */
 
@@ -343,86 +343,6 @@ async function resolveRevolutAccounts(transactions, accounts) {
     return result;
 }
 
-/**
- * GoCardless връща прехвърлянията между основна сметка и джоб (Vault) на Revolut
- * в обратната сметка: „To EUR Caravan“ с плюс в основната сметка (това е постъплението
- * в джоба) и с минус в джоба (това е плащането от основната сметка).
- * Местим ги там, където им е мястото по посоката на превода.
- * @returns {Promise<number>} брой преместени транзакции
- */
-async function fixRevolutPocketTransfers({ dryRun = false } = {}) {
-    const accounts = (await database.getAllAccounts()).filter(isRevolutAccount);
-    const pockets = accounts.filter(a => !a.iban);
-    let moved = 0;
-
-    // Обмен от друга валута към джоба („Exchanged to EUR Caravan“, −0.14 USD) идва в джоба, а е
-    // движение по сметката в изходната валута — редът е във валута, различна от тази на сметката
-    const allRows = (await database.getTransactionsForMatching(accounts.map(a => a.id), '0000-01-01', '9999-12-31'))
-        .filter(isBankRow);
-    for (const row of allRows) {
-        const raw = parseJson(row.raw_data) || {};
-        const currency = raw.transactionAmount && raw.transactionAmount.currency;
-        const account = accounts.find(a => a.id === row.account_id);
-        if (!currency || !account || accountCurrency(account) === currency) continue;
-        const targets = accounts.filter(a => a.iban && accountCurrency(a) === currency);
-        if (targets.length !== 1) continue;
-        moved++;
-        logger.info(`[Revolut pockets] ${dryRun ? '(dry run) ' : ''}Move ${row.id} (${row.transaction_date} ${currency} ${raw.transactionAmount.amount}) ${row.account_id} → ${targets[0].id} (currency)`);
-        if (!dryRun) await database.moveTransactionToAccount(row.id, targets[0].id);
-    }
-
-    for (const pocket of pockets) {
-        const mains = accounts.filter(a => a.iban && accountCurrency(a) === accountCurrency(pocket));
-        if (mains.length !== 1) continue;
-        const main = mains[0];
-
-        const names = [pocket.name, pocket.custom_name]
-            .filter(n => n && n.trim().length >= 3)
-            .map(n => n.trim().toLowerCase());
-        if (!names.length) continue;
-
-        const rows = (await database.getTransactionsForMatching([main.id, pocket.id], '0000-01-01', '9999-12-31'))
-            .filter(isBankRow);
-
-        for (const row of rows) {
-            const raw = parseJson(row.raw_data) || {};
-            if (raw.proprietaryBankTransactionCode === 'EXCHANGE') continue; // обмен — между валути, не джоб
-            const text = [
-                ...(raw.remittanceInformationUnstructuredArray || []),
-                raw.remittanceInformationUnstructured || '',
-                row.description || '',
-                row.counterparty_name || ''
-            ].join(' ').toLowerCase();
-
-            let direction = null;
-            const name = names.find(n => text.includes(n));
-            if (name) {
-                const before = text.slice(0, text.indexOf(name));
-                direction = /\bto\b[^a-z]*(?:\w+\s+)?$/.test(before) ? 'to'
-                    : /\bfrom\b[^a-z]*(?:\w+\s+)?$/.test(before) ? 'from' : null;
-            } else if (raw.proprietaryBankTransactionCode === 'TRANSFER'
-                && (raw.remittanceInformationUnstructuredArray || []).join(' ').trim().toLowerCase() === `to ${accountCurrency(main).toLowerCase()}`
-                && pockets.filter(p => accountCurrency(p) === accountCurrency(main)).length === 1) {
-                // „To EUR“ — теглене от джоба към основната сметка (името на джоба липсва)
-                direction = 'from';
-            }
-            if (!direction) continue;
-
-            // to: основна (−) → джоб (+); from: джоб (−) → основна (+)
-            const belongsToPocket = direction === 'to' ? row.amount > 0 : row.amount < 0;
-            const target = belongsToPocket ? pocket : main;
-            if (row.account_id === target.id || row.amount === 0) continue;
-
-            moved++;
-            logger.info(`[Revolut pockets] ${dryRun ? '(dry run) ' : ''}Move ${row.id} (${row.transaction_date} ${row.amount}) ${row.account_id} → ${target.id}`);
-            if (!dryRun) await database.moveTransactionToAccount(row.id, target.id);
-        }
-    }
-
-    if (moved) logger.info(`[Revolut pockets] ${dryRun ? 'Would move' : 'Moved'} ${moved} pocket transfers`);
-    return moved;
-}
-
 // ---------------------------------------------------------------------------
 // ДСК: неосчетоводени картови операции („блокирани суми“)
 // ---------------------------------------------------------------------------
@@ -638,9 +558,7 @@ async function fixRevolutImportFees({ dryRun = true } = {}) {
 async function reconcileImportedTransactions({ dryRun = true } = {}) {
     const accounts = await database.getAllAccounts();
     const byId = new Map(accounts.map(a => [a.id, a]));
-    const result = { pocketTransfersMoved: 0, importedMoved: 0, duplicatesMerged: 0, cardHoldsRemoved: 0, cardHoldsUnmatched: 0, feesFixed: 0, samples: [] };
-
-    result.pocketTransfersMoved = await fixRevolutPocketTransfers({ dryRun });
+    const result = { importedMoved: 0, duplicatesMerged: 0, cardHoldsRemoved: 0, cardHoldsUnmatched: 0, feesFixed: 0, samples: [] };
 
     // 2) Revolut редове от файл в сметка, която не отговаря на продукта от файла
     const revolutAccounts = accounts.filter(isRevolutAccount);
@@ -706,7 +624,7 @@ async function reconcileImportedTransactions({ dryRun = true } = {}) {
     result.cardHoldsRemoved = holds.removed;
     result.cardHoldsUnmatched = holds.unmatched;
 
-    logger.info(`[Reconcile] ${dryRun ? '(dry run) ' : ''}pockets moved ${result.pocketTransfersMoved}, imported moved ${result.importedMoved}, duplicates merged ${result.duplicatesMerged}, card holds removed ${result.cardHoldsRemoved}, fees fixed ${result.feesFixed}`);
+    logger.info(`[Reconcile] ${dryRun ? '(dry run) ' : ''}imported moved ${result.importedMoved}, duplicates merged ${result.duplicatesMerged}, card holds removed ${result.cardHoldsRemoved}, fees fixed ${result.feesFixed}`);
     return result;
 }
 
@@ -716,7 +634,6 @@ module.exports = {
     rowFeatures,
     importFeatures,
     resolveRevolutAccounts,
-    fixRevolutPocketTransfers,
     filterDuplicates,
     moveSameIdToAccounts,
     reconcileImportedTransactions,

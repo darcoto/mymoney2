@@ -45,6 +45,55 @@ class APIClient {
         }
     }
 
+    // График (синхронизация, архив) и Telegram
+    async getSchedule() {
+        return this.request('/schedule');
+    }
+
+    async updateSchedule(changes) {
+        return this.request('/schedule', { method: 'PUT', body: JSON.stringify(changes) });
+    }
+
+    async getTelegramStatus() {
+        return this.request('/telegram');
+    }
+
+    async updateTelegram(changes) {
+        return this.request('/telegram', { method: 'PUT', body: JSON.stringify(changes) });
+    }
+
+    async removeTelegram() {
+        return this.request('/telegram', { method: 'DELETE' });
+    }
+
+    async createTelegramPairCode() {
+        return this.request('/telegram/pair', { method: 'POST' });
+    }
+
+    async unlinkTelegramChat() {
+        return this.request('/telegram/chat', { method: 'DELETE' });
+    }
+
+    async sendTelegramTest() {
+        return this.request('/telegram/test', { method: 'POST' });
+    }
+
+    async getDebugStatus() {
+        return this.request('/debug');
+    }
+
+    async setDebugApiResponses(enabled) {
+        return this.request('/debug', { method: 'PUT', body: JSON.stringify({ apiResponses: enabled }) });
+    }
+
+    async clearDebugApiResponses() {
+        return this.request('/debug/api-responses', { method: 'DELETE' });
+    }
+
+    async sendTelegramPending() {
+        return this.request('/telegram/pending', { method: 'POST' });
+    }
+
     // Version
     async getVersion() {
         return this.request('/version');

@@ -228,7 +228,7 @@ async function main() {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dryRun: true })
         });
         const r = await res.json();
-        const total = r.pocketTransfersMoved + r.importedMoved + r.duplicatesMerged + (r.cardHoldsRemoved || 0) + (r.feesFixed || 0);
+        const total = r.importedMoved + r.duplicatesMerged + (r.cardHoldsRemoved || 0) + (r.feesFixed || 0);
         total ? problem(`обединяването (dry run) би променило: ${JSON.stringify({ ...r, samples: undefined, success: undefined, dryRun: undefined })}`) : ok('„Провери за дубликати“ (dry run): няма какво да се поправя');
     } catch (e) {
         note('сървърът не отговаря — проверката „Провери за дубликати“ (dry run) е пропусната');

@@ -221,6 +221,28 @@ async function initialize() {
           )
         `);
 
+        // Настройки на приложението (ключ → стойност): график, архив, Telegram
+        await runQuery(`
+          CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
+
+        // Съобщения в Telegram за нови транзакции (кратко id за бутоните; транзакцията може да е изтрита)
+        await runQuery(`
+          CREATE TABLE IF NOT EXISTS telegram_notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_id TEXT NOT NULL UNIQUE,
+            chat_id TEXT,
+            message_id INTEGER,
+            status TEXT DEFAULT 'sent',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            handled_at DATETIME
+          )
+        `);
+
         // Insert default providers if none exist
         const providersCount = await getQuery('SELECT COUNT(*) as count FROM providers');
         if (providersCount.count === 0) {
@@ -605,6 +627,24 @@ async function categorizeByCounterparty(counterpartyName, categoryId) {
     [categoryId, counterpartyName]
   );
   return result.changes || 0;
+}
+
+// ─── Настройки на приложението ───────────────────────────────────────────────
+
+async function getSetting(key, defaultValue = null) {
+  const row = await getQuery('SELECT value FROM app_settings WHERE key = ?', [key]);
+  return row && row.value !== null ? row.value : defaultValue;
+}
+
+async function setSetting(key, value) {
+  if (value === null || value === undefined) {
+    return runQuery('DELETE FROM app_settings WHERE key = ?', [key]);
+  }
+  return runQuery(
+    `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+    [key, String(value)]
+  );
 }
 
 async function updateTransactionNotes(id, notes) {
@@ -1466,6 +1506,8 @@ module.exports = {
   deleteProviderSessions,
   getAccountsByProvider,
   // Low-level helpers (for advanced queries in routes)
+  getSetting,
+  setSetting,
   runQuery,
   getQuery,
   allQuery

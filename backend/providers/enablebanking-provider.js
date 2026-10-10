@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const BaseProvider = require('./base-provider');
 const database = require('../database');
 const logger = require('../logger');
+const apiDebug = require('../api-debug');
 const config = require('../config');
 const { processTransactionBatch } = require('../transaction-processor');
 
@@ -79,9 +80,11 @@ class EnableBankingProvider extends BaseProvider {
     client.interceptors.response.use(
       (response) => {
         logger.info(`[EnableBanking API] <<< ${response.config.method.toUpperCase()} ${response.config.baseURL}${response.config.url} - Status: ${response.status}`);
+        apiDebug.saveAxiosResponse('enablebanking', response);
         return response;
       },
       (error) => {
+        apiDebug.saveAxiosError('enablebanking', error);
         logger.error(`[EnableBanking API] Response error`, {
           status: error.response?.status,
           data: error.response?.data

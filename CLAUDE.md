@@ -32,6 +32,7 @@ PORT=3499 DATABASE_NAME=zz-test.db node backend/server.js
 - **No test suite** (`npm test` exits with error). Verify changes manually.
 - **Never test against `data/finance.db`** — it is the user's real data. Copy it (`cp data/finance.db data/zz-test.db`), run a second server on another port (see above), then delete the copy.
 - Real bank APIs can't be exercised without the user approving access at the bank. For provider logic, instantiate the provider directly and replace `provider._getClient` with a fake axios-like `{ get, post, delete }` returning `{ data }`.
+- Telegram: replace `axios.post` with a fake before requiring `backend/telegram.js` and drive `telegram._internal.handleMessage/handleCallback` (no real bot needed). On a DB copy set `schedule.lastConsentCheck` to today first — otherwise the scheduler calls the real bank API.
 - Frontend: check in the browser (Playwright MCP is available) and look at console errors. Static files are served by `express.static` without cache settings and the browser often keeps the old JS/CSS — force-reload (Ctrl+F5) after changes.
 - Port 3456 is usually the user's running instance — don't kill it; use another port for testing.
 
@@ -54,6 +55,11 @@ PORT=3499 DATABASE_NAME=zz-test.db node backend/server.js
 | `file-import.js` | File import entry point: detects the format by content (DSK `.xls`, Revolut CSV), resolves the account(s), drops duplicates, saves |
 | `dsk-import.js` | DSK „Excel“ export parser (HTML table — account number, type, reference, FX). IDs are the same as the former XML import (XML support was removed — no account info, no type) |
 | `revolut-import.js` | Revolut CSV parser (product, fee, balance, start/completion time; approximate currency-to-EUR rates) |
+| `sync-service.js` | `runSync()` — shared by the sync button (SSE) and the scheduler; one sync at a time; post-sync reconcile + `onAfterSync` hooks (Telegram) |
+| `scheduler.js` | In-app schedule (30 s tick, Europe/Sofia time via `time.js`): sync at `schedule.syncTimes` (off by default, max 4/day), daily backup, bank-consent expiry warning |
+| `backup.js` | `VACUUM INTO` backups in `data/backups`; `*_auto_<date>.db` pruned to 14 daily + 12 monthly; manual `*_backup_*` kept |
+| `telegram.js` | Telegram bot (long polling, no public URL): message per new bank transaction with category buttons, reply = note, `/pending`, `/status`, alerts; pairing via `/start <code>` |
+| `api-debug.js` | Debug option (Settings → „Дебъг“, `debug.apiResponses`): saves every raw bank API response (GoCardless, Enable Banking; not token/auth calls) to `data/api-responses/<date>/*.json` — analyse without repeating rate-limited requests; delete from Settings |
 | `insights.js` | Analytical reports: cash flow / savings rate, recurring payments, year-over-year comparison, bank costs, trips abroad |
 | `transaction-matching.js` | Matching file ↔ bank transactions, Revolut account resolution, Revolut pocket fix, `reconcileImportedTransactions()` |
 | `country-codes.js` | ISO 3166-1 alpha-3 codes with flag emojis; extracts country from counterparty names |
@@ -75,7 +81,7 @@ Routes in `backend/routes/`: `providers.js`, `sync.js`, `accounts.js`, `transact
 ### Frontend (`frontend/`)
 
 - **SPA:** single `index.html`, page routing via `data-page` attributes and URL hash
-- **Scripts:** classic `<script>` tags sharing the global scope (no modules, no bundler). Load order in `index.html` matters: `api-client` → `utils` → `modal` → `transaction-details` → `charts` → `dashboard` → `transactions` → `import` → `categories` → `reports` → `insights` → `settings` → `sync` → `app` (last).
+- **Scripts:** classic `<script>` tags sharing the global scope (no modules, no bundler). Load order in `index.html` matters: `api-client` → `utils` → `modal` → `transaction-details` → `charts` → `dashboard` → `transactions` → `import` → `categories` → `reports` → `insights` → `settings` → `automation` → `sync` → `app` (last).
 
 | File | Purpose |
 |------|---------|
@@ -84,6 +90,7 @@ Routes in `backend/routes/`: `providers.js`, `sync.js`, `accounts.js`, `transact
 | `modal.js` | `openModal` / `closeModal` / `updateModal` / `isModalOpen` and `openOverlay` / `closeOverlay` — the only way to use `#modal` / `#overlayModal`; they reset state, handle Escape, backdrop, Enter-to-save, autofocus and double-submit |
 | `transaction-details.js` | Shared "Детайли на транзакция" view (`renderTransactionDetails`, `bindTransactionDetails`) used by the transactions page and report lists |
 | `transactions.js` | Transactions page (`transactionsPage`), filters, pagination, details modal (`showRawData`) |
+| `automation.js` | Settings cards „Автоматизация“ (schedule, backup) and „Telegram“ (token, pairing, quiet hours) |
 | `insights.js` | Analytical report tabs (registers into `REPORT_SECTIONS`); lists behind rows via `data-action="insight-tx"` / `"compare-tx"` |
 | `reports.js` | All reports; `reportState`; `openTransactionsListModal(title, transactions, { showCategory, note })` and `showTransactionOverlay(index)` |
 | `categories.js`, `settings.js`, `sync.js`, `import.js`, `dashboard.js`, `charts.js` | Their pages / dialogs |
@@ -93,7 +100,7 @@ Routes in `backend/routes/`: `providers.js`, `sync.js`, `accounts.js`, `transact
 - **Escaping:** everything from the server (especially bank data: counterparty names, descriptions) goes through `escapeHtml` before `innerHTML`.
 - **Chart.js** is vendored in `frontend/vendor/` (no CDN — the app must work offline).
 
-### Database Schema (7 tables)
+### Database Schema (9 tables)
 
 - `accounts` — bank accounts: IBAN, balance (EUR), institution, `provider_id`, `authorization_id`, `original_currency` (the account's currency at the bank; `currency` is always EUR). Special account `CASH` holds manual transactions.
 - `transactions` — dates, amounts (EUR) + `original_amount/currency`, description, counterparty, category, notes, country, `raw_data`
@@ -102,6 +109,8 @@ Routes in `backend/routes/`: `providers.js`, `sync.js`, `accounts.js`, `transact
 - `providers` — bank data providers with credentials (JSON)
 - `provider_sessions` — provider auth tokens/sessions
 - `counterparty_aliases` — display names for counterparties
+- `app_settings` — key/value settings (`schedule.*`, `telegram.*`, `sync.lastResult`) via `getSetting`/`setSetting`
+- `telegram_notifications` — one row per notified transaction (short id used in button `callback_data`, message id for replies)
 
 **Transaction ID sources** (matters for deduplication):
 
@@ -112,13 +121,13 @@ Routes in `backend/routes/`: `providers.js`, `sync.js`, `accounts.js`, `transact
 | `CASH_<ts>_<rand>` | Manual cash transaction |
 | other | Bank API: GoCardless `transactionId`, else `internalTransactionId` (DSK returns only the latter) |
 
-Bank-API transactions have JSON `raw_data` with `transactionAmount`; queries use `raw_data LIKE '%"transactionAmount"%'` to select them. File imports are deduplicated against existing transactions (`transaction-matching.js`): Revolut by amount + balance after the transaction (or exact time, CSV times are Europe/Sofia), DSK by date + amount + counterparty (same date + amount only when the groups on both sides are the same size). `reconcileImportedTransactions()` runs automatically after every transaction sync (`routes/sync.js`) and from Settings → „Дубликати от импорт“ (`POST /transactions/reconcile-imports`, dry run by default). Steps: Revolut pocket/currency moves → old Revolut imports to the right account → fee fix for old Revolut imports (`Сума − Такса`; before matching, otherwise the amounts differ) → file ↔ bank merge (the bank row is kept, category/notes are carried over) → DSK card holds.
+Bank-API transactions have JSON `raw_data` with `transactionAmount`; queries use `raw_data LIKE '%"transactionAmount"%'` to select them. File imports are deduplicated against existing transactions (`transaction-matching.js`): Revolut by amount + balance after the transaction (or exact time, CSV times are Europe/Sofia), DSK by date + amount + counterparty (same date + amount only when the groups on both sides are the same size). `reconcileImportedTransactions()` runs automatically after every transaction sync (`routes/sync.js`) and from Settings → „Дубликати от импорт“ (`POST /transactions/reconcile-imports`, dry run by default). Steps: old Revolut imports to the account of their product → fee fix for old Revolut imports (`Сума − Такса`; before matching, otherwise the amounts differ) → file ↔ bank merge (the bank row is kept, category/notes are carried over) → DSK card holds.
 
 **File import accounts:** DSK `.xls` → account by the number in the header (IBAN ends with it); Revolut CSV → by `Продукт` (Разплащателна → account with IBAN, Спестявания → pocket = Revolut account without IBAN) + `Валута`.
 
 **DSK card holds:** the DSK API has returned card authorizations (blocked amounts) as booked transactions — no `entryReference`, positive amount, text only `<masked card> <12-digit code>`; the settled payment comes later as a separate row. `isDskCardHold()` skips them in the GoCardless sync, `removeDskCardHolds()` (part of the reconcile) merges stored ones into the payment (same account, opposite amount, ≤10 days later, purchase date in the text = hold date). In the DSK `.xls` such pending rows have no „Вид на трансакцията“ and are skipped on import.
 
-**Revolut pockets (Vault):** GoCardless returns pocket transfers in the *other* account („To EUR Caravan“ with + in the main account, with − in the pocket; „To EUR“ with + in the pocket) and leaves out the counterpart leg. `fixRevolutPocketTransfers()` moves them after every transaction sync and before a Revolut import; the missing legs come only from the CSV import. It also moves a row whose `transactionAmount.currency` differs from the account's currency (e.g. „Exchanged to EUR Caravan“ −0.14 USD lands in the pocket) to the Revolut account in that currency. Revolut sends the text in `remittanceInformationUnstructuredArray` (no `remittanceInformationUnstructured`) — see `transactionDescription()` in the GoCardless provider.
+**Revolut transfers between own accounts (main ↔ pocket „Caravan“, USD ↔ EUR):** both legs come with the **same `transactionId`** and different `internalTransactionId`. The transaction ID is therefore `internalTransactionId || transactionId` (DSK only has the internal one). Older rows keyed by `transactionId` keep their ID: `_keepExistingTransactionIds()` matches first by `internalTransactionId` stored in `raw_data`, then by content. (Earlier the shared key made one leg overwrite the other, which looked like „GoCardless returns pocket transfers in the other account“ — the former `fixRevolutPocketTransfers()` was removed.) Revolut sends the text in `remittanceInformationUnstructuredArray` (no `remittanceInformationUnstructured`) — see `transactionDescription()` in the GoCardless provider.
 
 ## Key Implementation Patterns
 
@@ -141,6 +150,8 @@ Bank-API transactions have JSON `raw_data` with `transactionAmount`; queries use
 - Account sync uses requisitions with status `LN`. GoCardless keeps `LN` even after the End User Agreement (EUA) expires — `listAuthorizations()` loads each agreement and adds `expiresAt` / `expired`.
 - EUA cannot be extended for EU banks (`reconfirm` is GB-only) — the user must approve again at the bank. `createAuthorization()` creates an agreement with the institution's maximum `access_valid_for_days` (DSK/Revolut: 180) and `max_historical_days` (DSK 90, Revolut 730).
 - **Reconnect ("Поднови" in Settings) must continue history:** a new account ID is matched to the existing account by IBAN + `original_currency` (the Revolut accounts share one IBAN) and migrated; a transaction whose bank ID changed is matched 1:1 (date, amount, currency, reference, text, counterparty) and keeps its old ID, category and notes.
+- **Rate limit:** GoCardless allows ~4 calls/day per account per endpoint (PSD2 unattended access) — the scheduler allows at most 4 sync times a day; more returns 429.
+- GoCardless redirect after bank approval: the route uses the host the app was opened from (`req.protocol://req.get('host')/`), so it works on a server in the LAN.
 - Transaction sync is incremental: from the last bank transaction minus 7 days, clamped to the agreement's history window (new account → full history).
 - Redirect after bank approval is `http://localhost:<port>/`; GoCardless appends `?ref=...` and the frontend then auto-runs a full sync.
 - HTTP errors are turned into readable Bulgarian messages in `describeApiError()` (expired EUA, 429 rate limit).
@@ -177,6 +188,8 @@ All prefixed with `/api/`:
 - **Transactions:** `GET /transactions` (filters: account_id, start_date, end_date, category_id, type, search, country, limit, offset), `GET /transactions/stats`, `POST /transactions` (manual), `POST /transactions/import-file` (DSK .xls or Revolut CSV; `accountId` optional — auto-detected), `POST /transactions/reconcile-imports` (`{ dryRun }`), `POST /transactions/categorize-by-counterparty`, `PUT /transactions/:id/category|notes|country`, `POST /transactions/:id/reprocess`
 - **Categories:** CRUD at `/categories`; `/categorization-rules` CRUD + `POST /categorization-rules/apply`
 - **Reports:** `/reports/monthly` (category/counterparty/account breakdowns), `/reports/transactions`, `/reports/last-12-months`, `/reports/category-breakdown`, `/reports/counterparty`, `/reports/country`, `/reports/category-monthly`; analytics (`insights.js`): `/reports/cash-flow`, `/reports/recurring`, `/reports/year-comparison?year&month&mode=month|ytd`, `/reports/bank-costs` (category „Банкови“), `/reports/trips`
+- **Debug:** `GET|PUT /debug` (`{ apiResponses }`), `DELETE /debug/api-responses`
+- **Schedule / Telegram:** `GET|PUT /schedule`, `GET|PUT|DELETE /telegram`, `POST /telegram/pair|test|pending`, `DELETE /telegram/chat`
 - **Other:** `/countries`, `/countries/:code`, `/counterparty-aliases` (CRUD), `GET /logs`, `POST /backup`, `GET /version`
 
 ## Versioning & Claude Code Setup
@@ -188,6 +201,7 @@ All prefixed with `/api/`:
 
 ## Notes
 
+- **Raw API responses:** when „Дебъг“ is on, read them from `data/api-responses/` instead of calling the bank again.
 - **Logging:** all levels (including DEBUG and every SQL query) go to `data/app.log`; it gets large, so read it with `tail`/`grep`
 - **Currency:** all amounts stored in EUR; BGN converted at the fixed rate 1.95583 in providers; other currencies keep the original in `original_amount/original_currency`
 - **Backups:** `POST /api/backup` writes to `data/backups/`

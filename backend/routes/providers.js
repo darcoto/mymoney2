@@ -106,7 +106,13 @@ router.get('/:providerId/institutions', async (req, res) => {
 router.post('/:providerId/authorizations', async (req, res) => {
   try {
     const provider = await providerRegistry.getProviderById(parseInt(req.params.providerId));
-    const { institutionId, redirectUrl } = req.body;
+    const { institutionId } = req.body;
+    let { redirectUrl } = req.body;
+    // GoCardless връща потребителя на адреса, от който е отворено приложението (не localhost —
+    // приложението може да работи на друг компютър в мрежата). Enable Banking изисква регистриран адрес.
+    if (!redirectUrl && provider.type === 'gocardless') {
+      redirectUrl = `${req.protocol}://${req.get('host')}/`;
+    }
     const result = await provider.createAuthorization(institutionId, redirectUrl);
     res.json(result);
   } catch (error) {

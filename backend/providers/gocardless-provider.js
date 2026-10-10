@@ -8,6 +8,7 @@ const logger = require('../logger');
 const config = require('../config');
 const { processTransactionBatch } = require('../transaction-processor');
 const { isDskCardHold } = require('../transaction-matching');
+const apiDebug = require('../api-debug');
 
 const BASE_URL = 'https://bankaccountdata.gocardless.com';
 const BGN_TO_EUR_RATE = 1.95583;
@@ -215,10 +216,12 @@ class GoCardlessProvider extends BaseProvider {
       (response) => {
         const fullUrl = `${response.config.baseURL}${response.config.url}`;
         logApiResponse(response.config.method.toUpperCase(), fullUrl, response.status, response.data);
+        apiDebug.saveAxiosResponse('gocardless', response);
         return response;
       },
       (error) => {
         const fullUrl = error.config ? `${error.config.baseURL}${error.config.url}` : 'unknown';
+        apiDebug.saveAxiosError('gocardless', error);
         logger.error(`[GoCardless API] Response error: ${fullUrl}`, {
           status: error.response?.status,
           data: error.response?.data
@@ -564,22 +567,37 @@ class GoCardlessProvider extends BaseProvider {
 
     // Записани транзакции, които банката вече не връща със същото ID
     const unclaimed = new Map();
+    // Същата страна по internalTransactionId (записан в raw_data) — сигурно съвпадение, дори текстът
+    // да се е променил; напр. стари Revolut записи с ключ transactionId
+    const byInternalId = new Map();
     for (const row of existing) {
       if (batchIds.has(row.id)) continue;
       let raw;
       try { raw = JSON.parse(row.raw_data); } catch (e) { continue; }
+      if (raw.internalTransactionId && raw.internalTransactionId !== row.id) byInternalId.set(raw.internalTransactionId, row.id);
       const key = transactionMatchKey(raw);
       if (!unclaimed.has(key)) unclaimed.set(key, []);
       unclaimed.get(key).push(row.id);
     }
     if (unclaimed.size === 0) return 0;
 
+    const claimed = new Set();
     let remapped = 0;
     for (const tx of transactions) {
       if (existingIds.has(tx.id)) continue;
-      const candidates = unclaimed.get(transactionMatchKey(JSON.parse(tx.rawData)));
-      if (candidates && candidates.length > 0) {
-        const oldId = candidates.shift();
+      const internalId = JSON.parse(tx.rawData).internalTransactionId;
+      const exact = internalId && byInternalId.get(internalId);
+      if (exact && !claimed.has(exact)) {
+        claimed.add(exact);
+        log(`  Transaction id changed ${exact} -> ${tx.id} (same internalTransactionId), keeping ${exact}`);
+        tx.id = exact;
+        remapped++;
+        continue;
+      }
+      const candidates = (unclaimed.get(transactionMatchKey(JSON.parse(tx.rawData))) || []).filter(id => !claimed.has(id));
+      if (candidates.length > 0) {
+        const oldId = candidates[0];
+        claimed.add(oldId);
         log(`  Transaction id changed ${oldId} -> ${tx.id}, keeping ${oldId}`);
         tx.id = oldId;
         remapped++;
@@ -615,7 +633,10 @@ class GoCardlessProvider extends BaseProvider {
         const amountInEur = convertToEur(originalAmount, originalCurrency);
 
         return {
-          id: tx.transactionId || tx.internalTransactionId || `${accountId}-${tx.bookingDate}-${tx.transactionAmount.amount}`,
+          // internalTransactionId е уникален за всяка страна; transactionId при Revolut е общ за двете страни
+          // на превод между собствени сметки (основна ↔ джоб, USD ↔ EUR) — с него едната страна презаписва
+          // другата. Вече записаните с transactionId запазват ID-то си (_keepExistingTransactionIds).
+          id: tx.internalTransactionId || tx.transactionId || `${accountId}-${tx.bookingDate}-${tx.transactionAmount.amount}`,
           accountId: accountId,
           transactionDate: tx.valueDate || tx.bookingDate,
           bookingDate: tx.bookingDate,

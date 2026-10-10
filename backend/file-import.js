@@ -103,8 +103,6 @@ async function importFile({ fileContent, accountId = null }) {
             autoAssigned = true;
         }
         crossAccountIds = accounts.filter(matching.isRevolutAccount).map(a => a.id);
-        // Банковите записи на прехвърлянията към джоба първо отиват в правилната сметка
-        await matching.fixRevolutPocketTransfers();
     }
 
     logger.info(`[File Import] ${PARSER_NAMES[format]}: ${transactions.length} transactions`);

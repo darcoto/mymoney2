@@ -1030,3 +1030,13 @@ body {
 .trip-bar span { display: block; height: 100%; }
 .trip-cats { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.85em; }
 .trip-cats .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
+
+/* ─── Настройки: автоматизация и Telegram ─── */
+.automation-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 6px; }
+.automation-times { width: 260px; }
+.automation-time { width: 80px; }
+.automation-token { flex: 1; min-width: 260px; }
+.automation-hint { font-size: 0.85em; margin: 0 0 14px; }
+.automation-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.automation-divider { border: none; border-top: 1px solid var(--border-color); margin: 14px 0; }
+.telegram-steps { margin: 0 0 12px; padding-left: 20px; line-height: 1.7; }
