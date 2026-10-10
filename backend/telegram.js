@@ -16,6 +16,7 @@ const database = require('./database');
 const logger = require('./logger');
 const categorization = require('./categorization');
 const { zonedNow, inRange } = require('./time');
+const fmt = require('./telegram-format');
 
 const API = 'https://api.telegram.org';
 const POLL_TIMEOUT_S = 50;
@@ -47,19 +48,7 @@ async function call(method, params = {}, { token = state.token, timeout = 15000 
     }
 }
 
-function escapeHtml(text) {
-    return String(text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function formatAmount(amount) {
-    const abs = Math.abs(amount).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-    return `${amount < 0 ? '−' : '+'}${abs} €`;
-}
-
-function formatDate(dateStr) {
-    const [y, m, d] = String(dateStr).split('-');
-    return `${d}.${m}.${y}`;
-}
+const escapeHtml = fmt.escapeHtml;
 
 async function isQuietNow() {
     const from = await database.getSetting('telegram.quietFrom', '22:30');
@@ -110,42 +99,88 @@ async function getTransaction(id) {
     return database.getQuery(`${TX_SELECT} WHERE t.id = ?`, [id]);
 }
 
-function accountLabel(tx) {
-    const name = tx.account_custom_name || tx.account_name || '';
-    const iban = tx.account_iban || '';
-    return iban && name !== iban ? `${name} …${iban.slice(-4)}` : name;
+async function getAlias(tx) {
+    if (!tx.counterparty_name) return null;
+    const row = await database.getQuery('SELECT display_name FROM counterparty_aliases WHERE original_name = ?', [tx.counterparty_name]);
+    return row ? row.display_name : null;
 }
 
-function transactionText(tx, resultLine = null) {
-    const income = tx.amount > 0;
-    const who = (tx.counterparty_name || tx.description || '—').trim();
-    const lines = [`${income ? '💰' : '💳'} <b>${formatAmount(tx.amount)}</b> · ${escapeHtml(who)}`];
-    if (tx.original_currency && tx.original_currency !== 'EUR' && tx.original_currency !== 'BGN' && tx.original_amount) {
-        lines[0] += ` (${Math.abs(tx.original_amount).toFixed(2).replace('.', ',')} ${escapeHtml(tx.original_currency)})`;
+function monthStart() {
+    return `${zonedNow().date.slice(0, 7)}-01`;
+}
+
+/**
+ * Ред с контекст: кое поредно плащане при същия търговец е този месец, иначе колко е дадено в категорията
+ */
+async function contextLine(tx, merchant, category) {
+    const from = monthStart();
+    if (tx.counterparty_name) {
+        const same = await database.getQuery(`SELECT COUNT(*) AS n FROM transactions
+            WHERE counterparty_name = ? AND transaction_date >= ? AND transaction_date <= ? AND (amount < 0) = ?`,
+            [tx.counterparty_name, from, tx.transaction_date, tx.amount < 0 ? 1 : 0]);
+        if (same.n >= 2) return `🔁 ${fmt.ordinal(same.n)} ${tx.amount < 0 ? 'плащане при' : 'постъпление от'} ${fmt.escapeHtml(merchant)} този месец`;
     }
-    lines.push(`${escapeHtml(accountLabel(tx))} · ${formatDate(tx.transaction_date)}`);
-    const description = (tx.description || '').trim();
-    if (description && description !== who) lines.push(`<i>${escapeHtml(description.slice(0, 140))}</i>`);
-    if (resultLine) {
-        lines.push(resultLine);
-    } else {
-        lines.push(tx.category_name ? `🏷️ ${escapeHtml(tx.category_name)} <i>(автоматично)</i>` : '❔ Без категория');
+    if (category && tx.amount < 0) {
+        const sum = await database.getQuery(`SELECT COUNT(*) AS n, -SUM(amount) AS s FROM transactions
+            WHERE category_id = ? AND transaction_date >= ? AND amount < 0`, [category.id, from]);
+        if (sum.n > 0) return `${fmt.escapeHtml(fmt.categoryLabel(category))} този месец: ${Math.round(sum.s)} € (${sum.n}×)`;
     }
+    return null;
+}
+
+/** Подсказката за бележка — в първото съобщение за деня */
+async function noteHint() {
+    const today = zonedNow().date;
+    if ((await database.getSetting('telegram.hintDate')) === today) return null;
+    await database.setSetting('telegram.hintDate', today);
+    return '<i>💬 Отговорете с текст на съобщението, за да добавите бележка</i>';
+}
+
+/** Пълното съобщение за транзакция (за избор на категория) */
+async function transactionText(tx, { suggestions = null, withHint = false } = {}) {
+    const d = fmt.describe(tx, { alias: await getAlias(tx) });
+    const categories = await database.getAllCategories();
+    const current = tx.category_id ? categories.find(c => c.id === tx.category_id) : null;
+    const lines = [
+        `${d.icon} ${d.amountText}   <b>${fmt.escapeHtml(d.merchant)}</b>`,
+        d.metaLine
+    ];
+    if (d.note) lines.push(`💬 <i>${fmt.escapeHtml(d.note)}</i>`);
+    lines.push('');
+    const status = current ? `🏷️ ${fmt.escapeHtml(fmt.categoryLabel(current))} <i>(автоматично)</i>` : '❔ Без категория';
+    // Контекст по категория — само за сигурна (зададена, от правило или от историята на търговеца)
+    const likely = suggestions && suggestions[0] && suggestions[0].confident ? suggestions[0].category : null;
+    const context = await contextLine(tx, d.merchant, current || likely);
+    lines.push(context ? `${status}  ·  ${context}` : status);
+    if (withHint) {
+        const hint = await noteHint();
+        if (hint) lines.push('', hint);
+    }
+    return lines.join('\n');
+}
+
+/** Кратко съобщение след избор: „✅ ☕ Кофис · −4,10 € · Costa“ */
+async function compactText(tx, prefix, extraLine = null) {
+    const d = fmt.describe(tx, { alias: await getAlias(tx) });
+    const lines = [`${prefix} · ${d.amountText} · ${fmt.escapeHtml(d.merchant)}`];
+    if (extraLine) lines.push(extraLine);
     return lines.join('\n');
 }
 
 /**
  * Най-вероятните категории: правило → история на същия контрагент → най-честите напоследък
- * (за същата посока — плащане или постъпление)
+ * (за същата посока — плащане или постъпление). confident — от правило или история.
  */
 async function suggestCategories(tx, limit = SUGGESTIONS) {
-    const ids = [];
-    const add = id => { if (id && id !== tx.category_id && !ids.includes(id)) ids.push(id); };
+    const found = [];
+    const add = (id, confident) => {
+        if (id && id !== tx.category_id && !found.some(f => f.id === id)) found.push({ id, confident });
+    };
 
     categorization.clearRulesCache();
     const ruleMatches = await categorization.getSuggestions({ description: tx.description, counterpartyName: tx.counterparty_name });
     categorization.clearRulesCache();
-    ruleMatches.forEach(s => add(s.categoryId));
+    ruleMatches.forEach(s => add(s.categoryId, true));
 
     const negative = tx.amount < 0 ? 1 : 0;
     if (tx.counterparty_name) {
@@ -153,17 +188,19 @@ async function suggestCategories(tx, limit = SUGGESTIONS) {
             SELECT category_id, COUNT(*) AS n FROM transactions
             WHERE counterparty_name = ? AND category_id IS NOT NULL AND id <> ? AND (amount < 0) = ?
             GROUP BY category_id ORDER BY n DESC LIMIT 4`, [tx.counterparty_name, tx.id, negative]);
-        history.forEach(h => add(h.category_id));
+        history.forEach(h => add(h.category_id, true));
     }
     // Най-честите напоследък — без категориите за преводи (те идват само от правило/история)
     const recent = await database.allQuery(`
         SELECT t.category_id, COUNT(*) AS n FROM transactions t JOIN categories c ON c.id = t.category_id
         WHERE t.transaction_date >= date('now', '-120 days') AND (t.amount < 0) = ? AND c.type <> 'transfer'
         GROUP BY t.category_id ORDER BY n DESC LIMIT 12`, [negative]);
-    recent.forEach(r => add(r.category_id));
+    recent.forEach(r => add(r.category_id, false));
 
     const categories = await database.getAllCategories();
-    return ids.slice(0, limit).map(id => categories.find(c => c.id === id)).filter(Boolean);
+    return found.slice(0, limit)
+        .map(f => ({ category: categories.find(c => c.id === f.id), confident: f.confident }))
+        .filter(f => f.category);
 }
 
 /** Всички категории — най-използваните за тази посока първи */
@@ -177,22 +214,20 @@ async function allCategoriesSorted(tx) {
     return categories.sort((a, b) => (count.get(b.id) || 0) - (count.get(a.id) || 0) || a.name.localeCompare(b.name, 'bg'));
 }
 
-// Иконите на някои категории са имена от библиотека (напр. „utensils“) — в Telegram само емоджи
-function categoryButton(nid, category) {
-    const icon = category.icon && /\p{Extended_Pictographic}/u.test(category.icon) ? `${category.icon} ` : '';
-    return { text: `${icon}${category.name}`, callback_data: `c:${nid}:${category.id}` };
+function categoryButton(nid, category, star = false) {
+    return { text: `${star ? '⭐ ' : ''}${fmt.categoryLabel(category)}`, callback_data: `c:${nid}:${category.id}` };
 }
 
-async function mainKeyboard(nid, tx) {
-    const suggestions = await suggestCategories(tx);
+async function mainKeyboard(nid, tx, suggestions = null) {
+    const list = suggestions || await suggestCategories(tx);
     const rows = [];
-    if (tx.category_id && tx.category_name) {
-        rows.push([{ text: `✓ ${tx.category_name} — вярно`, callback_data: `k:${nid}` }]);
+    if (tx.category_id) {
+        const current = (await database.getAllCategories()).find(c => c.id === tx.category_id);
+        if (current) rows.push([{ text: `✓ ${fmt.categoryLabel(current)} — вярно`, callback_data: `k:${nid}` }]);
     }
-    for (let i = 0; i < suggestions.length; i += 2) {
-        rows.push(suggestions.slice(i, i + 2).map(c => categoryButton(nid, c)));
-    }
-    rows.push([{ text: 'Още…', callback_data: `m:${nid}:0` }, { text: 'Пропусни', callback_data: `s:${nid}` }]);
+    const buttons = list.map((s, i) => categoryButton(nid, s.category, i === 0 && s.confident && !tx.category_id));
+    for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
+    rows.push([{ text: '📂 Всички категории', callback_data: `m:${nid}:0` }, { text: '⏭ По-късно', callback_data: `s:${nid}` }]);
     return { inline_keyboard: rows };
 }
 
@@ -202,15 +237,23 @@ async function moreKeyboard(nid, tx, page) {
     const p = Math.min(Math.max(page, 0), pages - 1);
     const items = all.slice(p * PAGE_SIZE, (p + 1) * PAGE_SIZE);
     const rows = [];
-    for (let i = 0; i < items.length; i += 3) {
-        rows.push(items.slice(i, i + 3).map(c => categoryButton(nid, c)));
+    for (let i = 0; i < items.length; i += 2) {
+        rows.push(items.slice(i, i + 2).map(c => categoryButton(nid, c)));
     }
     const nav = [];
     if (p > 0) nav.push({ text: '◀', callback_data: `m:${nid}:${p - 1}` });
-    nav.push({ text: '↩ Назад', callback_data: `b:${nid}` });
+    nav.push({ text: `↩ Назад${pages > 1 ? ` (${p + 1}/${pages})` : ''}`, callback_data: `b:${nid}` });
     if (p < pages - 1) nav.push({ text: '▶', callback_data: `m:${nid}:${p + 1}` });
     rows.push(nav);
     return { inline_keyboard: rows };
+}
+
+async function fullMessage(nid, tx, { withHint = false } = {}) {
+    const suggestions = await suggestCategories(tx);
+    return {
+        text: await transactionText(tx, { suggestions, withHint }),
+        reply_markup: await mainKeyboard(nid, tx, suggestions)
+    };
 }
 
 async function sendTransactionMessage(tx) {
@@ -220,9 +263,30 @@ async function sendTransactionMessage(tx) {
          ON CONFLICT(transaction_id) DO UPDATE SET chat_id = excluded.chat_id, status = 'pending', handled_at = NULL`,
         [tx.id, chatId]);
     const row = await database.getQuery('SELECT id FROM telegram_notifications WHERE transaction_id = ?', [tx.id]);
-    const message = await sendMessage(transactionText(tx), { reply_markup: await mainKeyboard(row.id, tx) });
+    const { text, reply_markup } = await fullMessage(row.id, tx, { withHint: true });
+    const message = await sendMessage(text, { reply_markup });
     await database.runQuery('UPDATE telegram_notifications SET message_id = ?, status = ? WHERE id = ?',
         [message ? message.message_id : null, message ? 'sent' : 'failed', row.id]);
+}
+
+// ─── Правило „винаги този търговец → тази категория“ ────────────────────────
+
+/** Шаблон за правило: чистото име на търговеца (≥ 4 знака) или целият контрагент */
+function rulePattern(tx) {
+    const place = fmt.parseCardCounterparty(tx.counterparty_name);
+    const merchant = place ? place.merchant.toUpperCase() : '';
+    if (merchant.replace(/[^A-ZА-Я0-9]/g, '').length >= 4) return merchant;
+    const cp = String(tx.counterparty_name || '').replace(/\s+/g, ' ').trim().toUpperCase();
+    return cp.replace(/[^A-ZА-Я0-9]/g, '').length >= 4 ? cp : null;
+}
+
+/** Дали да се предложи правило: има шаблон и никое правило още не хваща транзакцията */
+async function canOfferRule(tx) {
+    if (!rulePattern(tx)) return false;
+    categorization.clearRulesCache();
+    const matches = await categorization.getSuggestions({ description: tx.description, counterpartyName: tx.counterparty_name });
+    categorization.clearRulesCache();
+    return matches.length === 0;
 }
 
 /**
@@ -283,9 +347,12 @@ async function sendPending() {
 
 // ─── Входящи съобщения и бутони ─────────────────────────────────────────────
 
-async function finishMessage(chatId, messageId, text) {
+async function editMessage(chatId, messageId, text, keyboard = null) {
     try {
-        await call('editMessageText', { chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML', disable_web_page_preview: true });
+        await call('editMessageText', {
+            chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML', disable_web_page_preview: true,
+            reply_markup: keyboard || { inline_keyboard: [] }
+        });
     } catch (error) {
         if (!/message is not modified/i.test(error.message)) throw error;
     }
@@ -306,33 +373,75 @@ async function handleCallback(query) {
         await call('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } }).catch(() => {});
         return null;
     }
+    const answer = text => call('answerCallbackQuery', { callback_query_id: query.id, ...(text ? { text } : {}) });
+    const setStatus = status => database.runQuery(
+        `UPDATE telegram_notifications SET status = ?, handled_at = ${status === 'sent' ? 'NULL' : 'CURRENT_TIMESTAMP'} WHERE id = ?`,
+        [status, nid]);
+    const edit = (text, keyboard = null) => editMessage(chatId, messageId, text, keyboard);
+    const categories = await database.getAllCategories();
 
-    const handled = async (status, line, toast) => {
-        await database.runQuery('UPDATE telegram_notifications SET status = ?, handled_at = CURRENT_TIMESTAMP WHERE id = ?', [status, nid]);
-        await finishMessage(chatId, messageId, transactionText(tx, line));
-        return call('answerCallbackQuery', { callback_query_id: query.id, text: toast });
+    // Кратко потвърждение с „✏️ Промени“ и (ако още няма правило) „🔁 Винаги …“
+    const done = async (category, toast) => {
+        const rows = [[{ text: '✏️ Промени', callback_data: `e:${nid}` }]];
+        if (await canOfferRule(tx)) {
+            const merchant = fmt.describe(tx, { alias: await getAlias(tx) }).merchant;
+            rows.push([{ text: `🔁 Винаги „${merchant.slice(0, 24)}“ → ${fmt.categoryLabel(category)}`, callback_data: `r:${nid}:${category.id}` }]);
+        }
+        await edit(await compactText(tx, `✅ ${fmt.escapeHtml(fmt.categoryLabel(category))}`), { inline_keyboard: rows });
+        return answer(toast);
     };
 
     switch (action) {
         case 'c': {
-            const category = (await database.getAllCategories()).find(c => c.id === Number(arg));
-            if (!category) return call('answerCallbackQuery', { callback_query_id: query.id, text: 'Няма такава категория' });
+            const category = categories.find(c => c.id === Number(arg));
+            if (!category) return answer('Няма такава категория');
             await database.updateTransactionCategory(tx.id, category.id);
+            tx.category_id = category.id;
+            await setStatus('categorized');
             logger.info(`[Telegram] ${tx.id} → category ${category.name}`);
-            return handled('categorized', `✅ ${escapeHtml(category.name)}`, `Записано: ${category.name}`);
+            return done(category, `Записано: ${category.name}`);
         }
-        case 'k':
-            return handled('confirmed', `✅ ${escapeHtml(tx.category_name || '')} <i>(потвърдена)</i>`, 'Потвърдено');
+        case 'k': {
+            const category = categories.find(c => c.id === tx.category_id);
+            if (!category) return answer('Няма категория за потвърждение');
+            await setStatus('confirmed');
+            return done(category, 'Потвърдено');
+        }
         case 's':
-            return handled('skipped', '⏭ Пропусната', 'Пропусната');
+            await setStatus('skipped');
+            await edit(await compactText(tx, '⏭ За по-късно'), { inline_keyboard: [[{ text: '🏷️ Категоризирай', callback_data: `e:${nid}` }]] });
+            return answer('Ще остане в /pending');
+        case 'e': {
+            // Обратно към пълното съобщение с предложенията
+            await setStatus('sent');
+            const { text, reply_markup } = await fullMessage(nid, tx);
+            await edit(text, reply_markup);
+            return answer();
+        }
+        case 'r': {
+            const category = categories.find(c => c.id === Number(arg));
+            const pattern = rulePattern(tx);
+            if (!category || !pattern) return answer('Не може да се създаде правило');
+            const rules = await database.getAllCategorizationRules();
+            if (!rules.some(r => r.pattern.toUpperCase() === pattern && r.category_id === category.id)) {
+                await database.createCategorizationRule({ pattern, categoryId: category.id, priority: 15 });
+            }
+            // Останалите некатегоризирани от същия контрагент — веднага
+            const others = tx.counterparty_name ? await database.categorizeByCounterparty(tx.counterparty_name, category.id) : 0;
+            logger.info(`[Telegram] Rule ${pattern} → ${category.name} (+${others} uncategorized)`);
+            await edit(await compactText(tx, `✅ ${fmt.escapeHtml(fmt.categoryLabel(category))}`,
+                `🔁 Правило: <code>${fmt.escapeHtml(pattern)}</code> → ${fmt.escapeHtml(fmt.categoryLabel(category))}${others ? ` (+${others} некатегоризирани)` : ''}`),
+                { inline_keyboard: [[{ text: '✏️ Промени', callback_data: `e:${nid}` }]] });
+            return answer('Правилото е създадено');
+        }
         case 'm':
             await call('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, reply_markup: await moreKeyboard(nid, tx, Number(arg) || 0) });
-            return call('answerCallbackQuery', { callback_query_id: query.id });
+            return answer();
         case 'b':
             await call('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, reply_markup: await mainKeyboard(nid, tx) });
-            return call('answerCallbackQuery', { callback_query_id: query.id });
+            return answer();
         default:
-            return call('answerCallbackQuery', { callback_query_id: query.id });
+            return answer();
     }
 }
 
@@ -398,7 +507,8 @@ async function handleMessage(message) {
         if (!tx) return sendMessage('Не намерих транзакцията за това съобщение.');
         const notes = tx.notes ? `${tx.notes}\n${text}` : text;
         await database.updateTransactionNotes(tx.id, notes);
-        return sendMessage(`📝 Бележката е записана към ${escapeHtml(formatAmount(tx.amount))} · ${escapeHtml(tx.counterparty_name || tx.description || '')}`,
+        const d = fmt.describe(tx, { alias: await getAlias(tx) });
+        return sendMessage(`📝 Бележката е записана към ${d.amountText} · ${fmt.escapeHtml(d.merchant)}`,
             { reply_to_message_id: message.message_id });
     }
 

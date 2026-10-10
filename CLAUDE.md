@@ -60,6 +60,7 @@ PORT=3499 DATABASE_NAME=zz-test.db node backend/server.js
 | `backup.js` | `VACUUM INTO` backups in `data/backups`; `*_auto_<date>.db` pruned to 14 daily + 12 monthly; manual `*_backup_*` kept |
 | `telegram.js` | Telegram bot (long polling, no public URL): message per new bank transaction with category buttons, reply = note, `/pending`, `/status`, alerts; pairing via `/start <code>` |
 | `api-debug.js` | Debug option (Settings → „Дебъг“, `debug.apiResponses`): saves every raw bank API response (GoCardless, Enable Banking; not token/auth calls) to `data/api-responses/<date>/*.json` — analyse without repeating rate-limited requests; delete from Settings |
+| `telegram-format.js` | Readable Telegram text: clean merchant name + city/flag from DSK card counterparties, purchase date/time and card from the description, foreign amount, note from the transfer reason, short account name |
 | `insights.js` | Analytical reports: cash flow / savings rate, recurring payments, year-over-year comparison, bank costs, trips abroad |
 | `transaction-matching.js` | Matching file ↔ bank transactions, Revolut account resolution, Revolut pocket fix, `reconcileImportedTransactions()` |
 | `country-codes.js` | ISO 3166-1 alpha-3 codes with flag emojis; extracts country from counterparty names |
@@ -104,7 +105,7 @@ Routes in `backend/routes/`: `providers.js`, `sync.js`, `accounts.js`, `transact
 
 - `accounts` — bank accounts: IBAN, balance (EUR), institution, `provider_id`, `authorization_id`, `original_currency` (the account's currency at the bank; `currency` is always EUR). Special account `CASH` holds manual transactions.
 - `transactions` — dates, amounts (EUR) + `original_amount/currency`, description, counterparty, category, notes, country, `raw_data`
-- `categories` — colors, icons, `type` (income/expense/transfer)
+- `categories` — colors, `icon` = emoji (shown on Telegram buttons; edited in the category form; `migrateCategoryEmoji()` replaces old icon names on startup), `type` (income/expense/transfer)
 - `categorization_rules` — pattern-matching rules with priority
 - `providers` — bank data providers with credentials (JSON)
 - `provider_sessions` — provider auth tokens/sessions

@@ -255,6 +255,8 @@ async function initialize() {
           await insertDefaultCategories();
         }
 
+        await migrateCategoryEmoji();
+
         resolve();
       } catch (err) {
         reject(err);
@@ -724,6 +726,40 @@ async function updateCategory(id, category) {
     'UPDATE categories SET name = ?, type = ?, color = ?, icon = ?, parent_id = ? WHERE id = ?',
     [category.name, category.type, category.color, category.icon, category.parentId, id]
   );
+}
+
+// Емоджи на категориите (полето icon; ползва се в Telegram и в редактора на категории).
+// Старите стойности са имена на иконки (напр. „utensils“) — заменят се по името на категорията;
+// емоджи, зададено от потребителя, не се пипа.
+const CATEGORY_EMOJI = {
+  'абонаменти': '📺', 'автопарк': '🚙', 'алдовски': '🐶', 'банкови': '🏛️', 'в брой': '💵',
+  'дарение': '🤝', 'детски': '👶', 'джаджи': '🎧', 'домакинство': '🧺', 'други разходи': '📦',
+  'забавления': '🎬', 'застраховки': '🛡️', 'здраве': '💊', 'комунални услуги': '🏠', 'кофис': '☕',
+  'лизинг и дългове': '🏦', 'морето': '🏖️', 'облекло': '👕', 'образование': '🎓', 'под наем': '🔑',
+  'подаръци': '🎁', 'пътешествия': '✈️', 'работа обяд': '🍱', 'служебни': '💼', 'телекомуникации': '📱',
+  'транспорт': '🚗', 'храна и напитки': '🍔', 'други приходи': '➕', 'заплата': '💰', 'инвестиции': '📈',
+  'подарък': '🎁', 'фрийланс': '💻', 'между сметки': '🔄', 'спестявания': '🐷'
+};
+const ICON_NAME_EMOJI = {
+  'utensils': '🍔', 'car': '🚗', 'home': '🏠', 'mobile': '📱', 'film': '🎬', 'shield-alt': '🛡️',
+  'couch': '🧺', 'ellipsis-h': '📦', 'tshirt': '👕', 'graduation-cap': '🎓', 'plus-circle': '➕',
+  'money-bill-wave': '💰', 'chart-line': '📈', 'gift': '🎁', 'laptop': '💻', 'exchange-alt': '🔄',
+  'piggy-bank': '🐷', 'heartbeat': '💊', 'heart': '💊'
+};
+
+function isEmoji(text) {
+  return !!text && /\p{Extended_Pictographic}/u.test(text);
+}
+
+async function migrateCategoryEmoji() {
+  const categories = await allQuery('SELECT id, name, icon FROM categories');
+  for (const c of categories) {
+    if (isEmoji(c.icon)) continue;
+    const emoji = CATEGORY_EMOJI[String(c.name || '').toLowerCase().trim()] || ICON_NAME_EMOJI[c.icon] || null;
+    if (emoji !== (c.icon || null)) {
+      await runQuery('UPDATE categories SET icon = ? WHERE id = ?', [emoji, c.id]);
+    }
+  }
 }
 
 async function deleteCategory(id) {

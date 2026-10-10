@@ -143,6 +143,11 @@ async function showAddCategoryModal() {
                 <label>Цвят</label>
                 <input type="color" id="categoryColor" class="input" value="#4CAF50" style="height: 40px; padding: 4px;">
             </div>
+            <div class="filter-group">
+                <label>Емоджи</label>
+                <input type="text" id="categoryEmoji" class="input" maxlength="8" placeholder="напр. ☕ 🍔 🚗 ✈️" value="" style="width: 120px;">
+                <small class="text-muted">Показва се в бутоните в Telegram (Win + . отваря емоджитата)</small>
+            </div>
         `;
 
         const saveHandler = async () => {
@@ -150,6 +155,7 @@ async function showAddCategoryModal() {
             const type = document.getElementById('categoryType').value;
             const color = document.getElementById('categoryColor').value;
             const parentId = document.getElementById('categoryParent').value || null;
+            const icon = document.getElementById('categoryEmoji').value.trim() || null;
 
             if (!name) {
                 showNotification('Моля, въведете име на категорията', 'error');
@@ -158,7 +164,7 @@ async function showAddCategoryModal() {
 
             try {
                 showLoader();
-                await api.createCategory({ name, type, color, parentId: parentId ? parseInt(parentId) : null });
+                await api.createCategory({ name, type, color, icon, parentId: parentId ? parseInt(parentId) : null });
                 closeModal();
                 showNotification('Категорията е създадена успешно', 'success');
                 await loadCategoriesPage();
@@ -221,6 +227,11 @@ async function editCategory(categoryId) {
                 <label>Цвят</label>
                 <input type="color" id="categoryColor" class="input" value="${escapeHtml(category.color || '#4CAF50')}" style="height: 40px; padding: 4px;">
             </div>
+            <div class="filter-group">
+                <label>Емоджи</label>
+                <input type="text" id="categoryEmoji" class="input" maxlength="8" placeholder="напр. ☕ 🍔 🚗 ✈️" value="${escapeHtml(category.icon || '')}" style="width: 120px;">
+                <small class="text-muted">Показва се в бутоните в Telegram (Win + . отваря емоджитата)</small>
+            </div>
         `;
 
         const saveHandler = async () => {
@@ -228,6 +239,7 @@ async function editCategory(categoryId) {
             const type = document.getElementById('categoryType').value;
             const color = document.getElementById('categoryColor').value;
             const parentId = document.getElementById('categoryParent').value || null;
+            const icon = document.getElementById('categoryEmoji').value.trim() || null;
 
             if (!name) {
                 showNotification('Моля, въведете име на категорията', 'error');
@@ -236,7 +248,7 @@ async function editCategory(categoryId) {
 
             try {
                 showLoader();
-                await api.updateCategory(categoryId, { name, type, color, parentId: parentId ? parseInt(parentId) : null });
+                await api.updateCategory(categoryId, { name, type, color, icon, parentId: parentId ? parseInt(parentId) : null });
                 closeModal();
                 showNotification('Категорията е обновена успешно', 'success');
                 await loadCategoriesPage();
