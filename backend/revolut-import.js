@@ -9,7 +9,7 @@ const logger = require('./logger');
 
 // Currency conversion rates to EUR
 const CURRENCY_RATES = {
-    'BGN': 1.9558,  // Fixed rate
+    'BGN': 1.95583, // Официален фиксиран курс
     'EUR': 1,
     'USD': 1.08,    // Approximate, should be updated
     'GBP': 0.85,    // Approximate, should be updated
@@ -79,7 +79,8 @@ function parseRevolutCsv(csvContent) {
         return [];
     }
 
-    // Get header row and find column indices
+    // Get header row and find column indices (BOM в началото на файла се маха)
+    rows[0][0] = rows[0][0].replace(/^﻿/, '');
     const header = rows[0].map(h => h.toLowerCase().trim());
     logger.info(`[Revolut Import] Header row: ${JSON.stringify(header)}`);
 
@@ -136,7 +137,7 @@ function parseRevolutCsv(csvContent) {
         // Skip pending/failed transactions if State column exists
         if (columnMap.state !== -1) {
             const state = (row[columnMap.state] || '').toLowerCase().trim();
-            // Accept: completed, завършен, завършена, завършено
+            // Accept: completed, завършен, завършена, завършено (ВЪРНАТО/REVERTED, PENDING и т.н. — не)
             const isCompleted = !state || state === 'completed' || state.startsWith('завършен');
             if (!isCompleted) {
                 skippedByState++;
@@ -145,7 +146,7 @@ function parseRevolutCsv(csvContent) {
         }
 
         try {
-            const transaction = parseRevolutRow(row, columnMap, i);
+            const transaction = parseRevolutRow(row, columnMap, i, rows[0]);
             if (transaction) {
                 transactions.push(transaction);
             } else {
@@ -161,27 +162,34 @@ function parseRevolutCsv(csvContent) {
 }
 
 /**
+ * Вид на продукта: разплащателна сметка или спестяване („джоб“/Vault)
+ */
+function productKind(product) {
+    const p = (product || '').toLowerCase();
+    if (!p) return null;
+    if (/спестяв|savings|pocket|джоб|vault/.test(p)) return 'savings';
+    if (/разплащ|current/.test(p)) return 'current';
+    return 'other';
+}
+
+/**
  * Parse a single CSV row into a transaction object
  * @param {Array} row - CSV row values
  * @param {Object} columnMap - Column name to index mapping
  * @param {number} rowIndex - Row index for error reporting
+ * @param {Array} headerNames - Original header names (за raw_data)
  * @returns {Object} Transaction object
  */
-function parseRevolutRow(row, columnMap, rowIndex) {
-    // Get values
-    const completedDateStr = columnMap.completedDate !== -1 ? row[columnMap.completedDate] : null;
-    const startDateStr = columnMap.startDate !== -1 ? row[columnMap.startDate] : null;
-    const description = columnMap.description !== -1 ? row[columnMap.description] : '';
-    const amountStr = columnMap.amount !== -1 ? row[columnMap.amount] : '0';
-    const currency = columnMap.currency !== -1 ? row[columnMap.currency] : 'EUR';
+function parseRevolutRow(row, columnMap, rowIndex, headerNames) {
+    const get = (key) => (columnMap[key] !== -1 ? (row[columnMap[key]] || '') : '');
+    const completedDateStr = get('completedDate') || null;
+    const startDateStr = get('startDate') || null;
+    const description = get('description');
+    const currency = get('currency') || 'EUR';
 
-    // Log first few rows for debugging
-    if (rowIndex <= 3) {
-        logger.info(`[Revolut Import] Row ${rowIndex} raw: completedDate="${completedDateStr}", amount="${amountStr}", currency="${currency}", desc="${description}"`);
-    }
-
-    // Parse dates (format: YYYY-MM-DD HH:MM:SS or similar)
-    const transactionDate = parseRevolutDate(completedDateStr);
+    // Датата на транзакцията е датата на завършване (същата като при синхронизацията
+    // с банката); при липса — началната
+    const transactionDate = parseRevolutDate(completedDateStr) || parseRevolutDate(startDateStr);
     const bookingDate = parseRevolutDate(startDateStr) || transactionDate;
 
     if (!transactionDate) {
@@ -189,26 +197,37 @@ function parseRevolutRow(row, columnMap, rowIndex) {
         return null;
     }
 
-    // Parse amount
-    const amount = parseRevolutAmount(amountStr);
+    // Таксата се удържа отделно от сумата — банката (API) връща общата сума
+    const fee = parseRevolutAmount(get('fee'));
+    const amount = parseFloat((parseRevolutAmount(get('amount')) - fee).toFixed(2));
 
     if (amount === 0) {
         logger.debug(`[Revolut Import] Row ${rowIndex}: Skipping zero amount transaction`);
         return null;
     }
 
-    // Store entire row as raw data (the original CSV row joined)
-    const rawRowString = row.join(',');
+    const balanceStr = get('balance');
+    const raw = {};
+    headerNames.forEach((name, idx) => {
+        if (row[idx] !== undefined && row[idx] !== '') raw[name] = row[idx];
+    });
 
     return {
         transactionDate,
         bookingDate,
         description: description.trim(),
         amount,
+        fee,
         currency: currency.toUpperCase(),
         counterpartyName: extractCounterpartyFromDescription(description),
-        rawRow: row,           // Keep array for ID generation
-        rawRowString           // String for storage
+        product: get('product') || null,
+        productKind: productKind(get('product')),
+        type: get('type') || null,
+        balance: balanceStr ? parseRevolutAmount(balanceStr) : null,
+        startedAt: startDateStr,
+        completedAt: completedDateStr,
+        rawRow: row,           // за генериране на ID (съвместимо с по-ранни импорти)
+        raw
     };
 }
 
@@ -232,7 +251,9 @@ function parseRevolutDate(dateStr) {
     // Try parsing with Date object
     const date = new Date(dateStr);
     if (!isNaN(date.getTime())) {
-        return date.toISOString().split('T')[0];
+        // Локална дата (toISOString би я изместил с ден назад)
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
     }
 
     return null;
@@ -309,11 +330,13 @@ function generateTransactionId(row) {
 
 /**
  * Process CSV content and prepare transactions for import
+ * Всяка транзакция носи и данни за разпознаване на сметката и дубликатите:
+ * product/productKind, currency (на файла), balance, startedAt, completedAt
  * @param {string} csvContent - Raw CSV content
- * @param {string} accountId - Target account ID
+ * @param {string|null} accountId - Target account ID (може да се зададе по-късно)
  * @returns {Array} Array of transactions ready for database import
  */
-function processCsvForImport(csvContent, accountId) {
+function processCsvForImport(csvContent, accountId = null) {
     const transactions = parseRevolutCsv(csvContent);
 
     return transactions.map(tx => {
@@ -333,10 +356,8 @@ function processCsvForImport(csvContent, accountId) {
             }
         }
 
-        // Store raw row as string
-        const rawData = tx.rawRowString;
-
-        const transaction = {
+        return {
+            id: generateTransactionId(tx.rawRow),
             transactionDate: tx.transactionDate,
             bookingDate: tx.bookingDate,
             description: tx.description,
@@ -346,18 +367,28 @@ function processCsvForImport(csvContent, accountId) {
             currency: 'EUR',
             counterpartyName: tx.counterpartyName,
             accountId,
-            rawData
+            rawData: JSON.stringify(tx.raw),
+            // Данни само за импорта (не се записват като отделни колони)
+            fileCurrency: tx.currency,
+            fileAmount: tx.amount,
+            product: tx.product,
+            productKind: tx.productKind,
+            balance: tx.balance,
+            startedAt: tx.startedAt,
+            completedAt: tx.completedAt
         };
-
-        // Generate unique ID from the entire row
-        transaction.id = generateTransactionId(tx.rawRow);
-
-        return transaction;
     });
+}
+
+function isRevolutCsv(content) {
+    const firstLine = content.replace(/^﻿/, '').split(/\r?\n/, 1)[0].toLowerCase();
+    return /(вид|type)/.test(firstLine) && /(продукт|product)/.test(firstLine) && /(сума|amount)/.test(firstLine);
 }
 
 module.exports = {
     parseRevolutCsv,
     generateTransactionId,
-    processCsvForImport
+    processCsvForImport,
+    productKind,
+    isRevolutCsv
 };

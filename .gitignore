@@ -6,3 +6,6 @@ data/
 Thumbs.db
 .claude/settings.local.json
 .serena/
+
+# Банкови извлечения за импорт (лични данни)
+import/

@@ -314,11 +314,19 @@ class APIClient {
         });
     }
 
-    // File Import (auto-detect parser based on account)
-    async importFileTransactions(fileContent, accountId, currency = null) {
+    // File Import (форматът и сметката се разпознават по съдържанието; accountId е по избор)
+    async importFileTransactions(fileContent, accountId) {
         return this.request('/transactions/import-file', {
             method: 'POST',
-            body: JSON.stringify({ fileContent, accountId, currency })
+            body: JSON.stringify({ fileContent, accountId })
+        });
+    }
+
+    // Обединяване на дубликати импорт ↔ банка (dryRun — само преглед)
+    async reconcileImports(dryRun = true) {
+        return this.request('/transactions/reconcile-imports', {
+            method: 'POST',
+            body: JSON.stringify({ dryRun })
         });
     }
 

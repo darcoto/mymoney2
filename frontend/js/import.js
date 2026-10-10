@@ -105,24 +105,17 @@ async function showImportFileModal() {
 
         const body = `
             <div class="filter-group">
-                <label>Сметка *</label>
-                <select id="importFileAccount" class="input" required>
-                    <option value="">Изберете сметка</option>
-                    ${accountOptions}
-                </select>
-                <small id="importFileFormat" class="text-muted"></small>
+                <label>Файл с транзакции *</label>
+                <input type="file" id="importFile" class="input" accept=".xls,.csv" required>
+                <small class="text-muted">Банка ДСК: експорт в Excel (.xls) · Revolut: CSV. Транзакциите, които вече са влезли от банката, се пропускат.</small>
             </div>
             <div class="filter-group">
-                <label>Файл с транзакции *</label>
-                <input type="file" id="importFile" class="input" accept=".xml,.csv" required>
-                <small class="text-muted">Поддържани формати: XML (DSK Bank), CSV (Revolut)</small>
-            </div>
-            <div class="filter-group" id="importCurrencyGroup" style="display: none;">
-                <label>Валута на файла</label>
-                <select id="importFileCurrency" class="input">
-                    <option value="BGN">BGN (ще се конвертира в EUR)</option>
-                    <option value="EUR">EUR</option>
+                <label>Сметка</label>
+                <select id="importFileAccount" class="input">
+                    <option value="">Автоматично (по файла)</option>
+                    ${accountOptions}
                 </select>
+                <small id="importFileFormat" class="text-muted">ДСК Excel и Revolut CSV се разпределят по сметки автоматично.</small>
             </div>
             <div id="importProgress" style="display: none; margin-top: 15px;">
                 <div class="progress-bar">
@@ -141,39 +134,26 @@ async function showImportFileModal() {
             onSave: () => saveHandler()
         });
 
-        // Update format hint when account is selected
+        // Подсказка според избраната сметка
         const accountSelect = document.getElementById('importFileAccount');
         const formatHint = document.getElementById('importFileFormat');
-        const currencyGroup = document.getElementById('importCurrencyGroup');
 
-        accountSelect.addEventListener('change', () => {
-            const selectedOption = accountSelect.options[accountSelect.selectedIndex];
-            const institution = (selectedOption.dataset.institution || '').toUpperCase();
-
-            if (institution.includes('DSK')) {
-                formatHint.textContent = '📄 Очаква се XML файл от Банка ДСК';
-                currencyGroup.style.display = 'block';
-            } else if (institution.includes('REVOLUT')) {
-                formatHint.textContent = '📄 Очаква се CSV файл от Revolut';
-                currencyGroup.style.display = 'none';
-            } else if (accountSelect.value) {
+        const updateHints = () => {
+            const institution = (accountSelect.options[accountSelect.selectedIndex].dataset.institution || '').toUpperCase();
+            if (accountSelect.value && !institution.includes('DSK') && !institution.includes('REVOLUT')) {
                 formatHint.textContent = '⚠️ Импортът не се поддържа за тази банка';
-                currencyGroup.style.display = 'none';
+            } else if (accountSelect.value) {
+                formatHint.textContent = 'Всички транзакции ще бъдат записани в избраната сметка.';
             } else {
-                formatHint.textContent = '';
-                currencyGroup.style.display = 'none';
+                formatHint.textContent = 'ДСК Excel и Revolut CSV се разпределят по сметки автоматично.';
             }
-        });
+        };
+        accountSelect.addEventListener('change', updateHints);
 
         const saveHandler = async () => {
             const fileInput = document.getElementById('importFile');
             const accountId = document.getElementById('importFileAccount').value;
-            const currency = document.getElementById('importFileCurrency').value;
 
-            if (!accountId) {
-                showNotification('Моля, изберете сметка', 'error');
-                return;
-            }
             if (!fileInput.files || fileInput.files.length === 0) {
                 showNotification('Моля, изберете файл', 'error');
                 return;
@@ -203,8 +183,8 @@ async function showImportFileModal() {
                 progressFill.style.width = '60%';
                 statusText.textContent = 'Изпращане към сървъра...';
 
-                // Send to server (parser is determined server-side based on account)
-                const result = await api.importFileTransactions(fileContent, accountId, currency);
+                // Форматът (и сметката, ако не е избрана) се разпознават от сървъра по съдържанието
+                const result = await api.importFileTransactions(fileContent, accountId || null);
 
                 progressFill.style.width = '100%';
                 statusText.textContent = 'Готово!';
@@ -215,10 +195,21 @@ async function showImportFileModal() {
                 if (result.parser) {
                     resultHtml += `📋 Парсер: ${escapeHtml(result.parser)}<br>`;
                 }
-                resultHtml += `✅ Импортирани: ${result.imported}<br>`;
+                if (result.accounts && result.accounts.length) {
+                    const list = result.accounts.map(a => `${escapeHtml(a.name)} (${a.count})`).join(', ');
+                    resultHtml += `🏦 Сметки: ${list}<br>`;
+                }
+                resultHtml += `✅ Нови: ${result.imported}<br>`;
                 resultHtml += `🏷️ Категоризирани: ${result.categorized || 0}<br>`;
-                resultHtml += `⏭️ Пропуснати (вече съществуват): ${result.skipped}<br>`;
-                resultHtml += `📊 Общо обработени: ${result.total}`;
+                resultHtml += `🔁 Вече има от банката (пропуснати): ${result.duplicates || 0}<br>`;
+                resultHtml += `⏭️ Вече импортирани от файл: ${result.skipped}<br>`;
+                if (result.moved) {
+                    resultHtml += `🔀 Преместени в правилната сметка: ${result.moved}<br>`;
+                }
+                resultHtml += `📊 Общо във файла: ${result.total}`;
+                (result.warnings || []).forEach(w => {
+                    resultHtml += `<br>⚠️ ${escapeHtml(w)}`;
+                });
 
                 if (result.errors && result.errors.length > 0) {
                     resultHtml += `<br><br>⚠️ Грешки: ${result.errors.length}`;

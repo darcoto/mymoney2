@@ -1103,6 +1103,87 @@ async function importTransactionsBatch(transactions) {
 }
 
 /**
+ * Транзакции за съпоставяне при импорт (дубликати между файл и банка)
+ * @param {Array<string>} accountIds
+ * @param {string} fromDate - YYYY-MM-DD
+ * @param {string} toDate - YYYY-MM-DD
+ */
+async function getTransactionsForMatching(accountIds, fromDate, toDate) {
+  if (!accountIds.length) return [];
+  const placeholders = accountIds.map(() => '?').join(',');
+  return allQuery(
+    `SELECT id, account_id, transaction_date, amount, original_amount, original_currency,
+            counterparty_name, description, category_id, notes, raw_data
+     FROM transactions
+     WHERE account_id IN (${placeholders}) AND transaction_date BETWEEN ? AND ?`,
+    [...accountIds, fromDate, toDate]
+  );
+}
+
+/**
+ * Импортирани от файл транзакции (ID с префикс REV_ / DSK_) в дадените сметки
+ */
+async function getFileImportedTransactions(accountIds) {
+  if (!accountIds.length) return [];
+  const placeholders = accountIds.map(() => '?').join(',');
+  return allQuery(
+    `SELECT id, account_id, transaction_date, amount, original_amount, original_currency,
+            counterparty_name, description, category_id, notes, raw_data
+     FROM transactions
+     WHERE account_id IN (${placeholders}) AND (substr(id, 1, 4) = 'REV_' OR substr(id, 1, 4) = 'DSK_')`,
+    accountIds
+  );
+}
+
+/**
+ * Сметка на съществуващи транзакции по ID (на порции — SQLite има лимит на параметрите)
+ * @returns {Map<string, string>} id → account_id
+ */
+async function getTransactionAccounts(ids) {
+  const result = new Map();
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const rows = await allQuery(
+      `SELECT id, account_id FROM transactions WHERE id IN (${chunk.map(() => '?').join(',')})`,
+      chunk
+    );
+    rows.forEach(row => result.set(row.id, row.account_id));
+  }
+  return result;
+}
+
+/**
+ * Премества транзакция в друга сметка (напр. грешно разпределени прехвърляния към джоб в Revolut)
+ */
+async function moveTransactionToAccount(id, accountId) {
+  return runQuery('UPDATE transactions SET account_id = ? WHERE id = ?', [accountId, id]);
+}
+
+/**
+ * Поправка на сумата (EUR) и оригиналната сума на транзакция
+ */
+async function updateTransactionAmount(id, amount, originalAmount) {
+  return runQuery('UPDATE transactions SET amount = ?, original_amount = ? WHERE id = ?', [amount, originalAmount, id]);
+}
+
+/**
+ * Обединява дубликат: категорията и бележките на `dropId` се пренасят в `keepId`,
+ * ако там липсват, след което `dropId` се изтрива
+ */
+async function mergeDuplicateTransaction(dropId, keepId) {
+  const drop = await getQuery('SELECT category_id, notes FROM transactions WHERE id = ?', [dropId]);
+  if (!drop) return;
+  await runQuery(
+    `UPDATE transactions SET
+       category_id = COALESCE(category_id, ?),
+       notes = CASE WHEN notes IS NULL OR notes = '' THEN ? ELSE notes END
+     WHERE id = ?`,
+    [drop.category_id, drop.notes, keepId]
+  );
+  await runQuery('DELETE FROM transactions WHERE id = ?', [dropId]);
+}
+
+/**
  * Get accounts by institution name pattern
  * @param {string} pattern - Pattern to search for in institution_name
  * @returns {Array} Matching accounts
@@ -1363,6 +1444,12 @@ module.exports = {
   deleteCounterpartyAlias,
   getCategoryByCounterparty,
   importTransactionsBatch,
+  getTransactionsForMatching,
+  getFileImportedTransactions,
+  getTransactionAccounts,
+  moveTransactionToAccount,
+  updateTransactionAmount,
+  mergeDuplicateTransaction,
   getAccountsByInstitution,
   getDistinctCountries,
   getCountryReport,

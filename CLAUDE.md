@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MyMoney2 is a personal finance management application with multi-provider bank data integration (GoCardless, Enable Banking). It syncs bank accounts/transactions automatically, imports bank files (DSK XML, Revolut CSV), categorizes transactions via pattern-matching rules, and provides dashboards and reports.
+MyMoney2 is a personal finance management application with multi-provider bank data integration (GoCardless, Enable Banking). It syncs bank accounts/transactions automatically, imports bank files (DSK „Excel“ .xls, Revolut CSV), categorizes transactions via pattern-matching rules, and provides dashboards and reports.
 
 **Language:** Bulgarian (UI, user-facing messages and code comments)
 
@@ -37,7 +37,7 @@ PORT=3499 DATABASE_NAME=zz-test.db node backend/server.js
 
 ## Tech Stack
 
-- **Backend:** Node.js/Express, SQLite3, axios, jsonwebtoken, fast-xml-parser
+- **Backend:** Node.js/Express, SQLite3, axios, jsonwebtoken
 - **Frontend:** Vanilla HTML/CSS/JavaScript, Chart.js 4 (CDN) — no frameworks, no build step
 - **Database:** SQLite at `./data/<DATABASE_NAME>` (auto-created, schema migrated on startup in `database.initialize()`)
 
@@ -49,10 +49,12 @@ PORT=3499 DATABASE_NAME=zz-test.db node backend/server.js
 |------|---------|
 | `server.js` | Express app entry point; mounts route modules, plus a few inline endpoints (countries, counterparty aliases, logs, backup, version) |
 | `database.js` | SQLite operations, schema + migrations, promise wrappers (`runQuery`, `getQuery`, `allQuery` — the last is not exported) |
-| `transaction-processor.js` | Shared pipeline: enrich (country + category) + upsert; used by providers and import routes |
+| `transaction-processor.js` | Shared pipeline: enrich (country + category) + upsert; used by providers and file import |
 | `categorization.js` | Transaction auto-categorization engine |
-| `xml-import.js` | DSK Bank XML file parser |
-| `revolut-import.js` | Revolut CSV file parser with approximate currency-to-EUR rates |
+| `file-import.js` | File import entry point: detects the format by content (DSK `.xls`, Revolut CSV), resolves the account(s), drops duplicates, saves |
+| `dsk-import.js` | DSK „Excel“ export parser (HTML table — account number, type, reference, FX). IDs are the same as the former XML import (XML support was removed — no account info, no type) |
+| `revolut-import.js` | Revolut CSV parser (product, fee, balance, start/completion time; approximate currency-to-EUR rates) |
+| `transaction-matching.js` | Matching file ↔ bank transactions, Revolut account resolution, Revolut pocket fix, `reconcileImportedTransactions()` |
 | `country-codes.js` | ISO 3166-1 alpha-3 codes with flag emojis; extracts country from counterparty names |
 | `config.js` | Configuration loader (`port`, `databasePath`, `nodeEnv`) |
 | `logger.js` | File logging with rotation at 5MB (`data/app.log`) |
@@ -103,12 +105,18 @@ Routes in `backend/routes/`: `providers.js`, `sync.js`, `accounts.js`, `transact
 
 | Prefix / form | Source |
 |---|---|
-| `DSK_xxxxxxxx` | DSK XML import (hash) |
+| `DSK_xxxxxxxx` | DSK `.xls` import (hash; older rows from the former XML import have the same IDs) |
 | `REV_xxxxxxxx` | Revolut CSV import (hash) |
 | `CASH_<ts>_<rand>` | Manual cash transaction |
 | other | Bank API: GoCardless `transactionId`, else `internalTransactionId` (DSK returns only the latter) |
 
-Bank-API transactions have JSON `raw_data` with `transactionAmount`; queries use `raw_data LIKE '%"transactionAmount"%'` to select them. File imports and API data for the same period are **not** cross-deduplicated (known: ~24 Revolut duplicates Oct–Dec 2025).
+Bank-API transactions have JSON `raw_data` with `transactionAmount`; queries use `raw_data LIKE '%"transactionAmount"%'` to select them. File imports are deduplicated against existing transactions (`transaction-matching.js`): Revolut by amount + balance after the transaction (or exact time, CSV times are Europe/Sofia), DSK by date + amount + counterparty (same date + amount only when the groups on both sides are the same size). `reconcileImportedTransactions()` runs automatically after every transaction sync (`routes/sync.js`) and from Settings → „Дубликати от импорт“ (`POST /transactions/reconcile-imports`, dry run by default). Steps: Revolut pocket/currency moves → old Revolut imports to the right account → fee fix for old Revolut imports (`Сума − Такса`; before matching, otherwise the amounts differ) → file ↔ bank merge (the bank row is kept, category/notes are carried over) → DSK card holds.
+
+**File import accounts:** DSK `.xls` → account by the number in the header (IBAN ends with it); Revolut CSV → by `Продукт` (Разплащателна → account with IBAN, Спестявания → pocket = Revolut account without IBAN) + `Валута`.
+
+**DSK card holds:** the DSK API has returned card authorizations (blocked amounts) as booked transactions — no `entryReference`, positive amount, text only `<masked card> <12-digit code>`; the settled payment comes later as a separate row. `isDskCardHold()` skips them in the GoCardless sync, `removeDskCardHolds()` (part of the reconcile) merges stored ones into the payment (same account, opposite amount, ≤10 days later, purchase date in the text = hold date). In the DSK `.xls` such pending rows have no „Вид на трансакцията“ and are skipped on import.
+
+**Revolut pockets (Vault):** GoCardless returns pocket transfers in the *other* account („To EUR Caravan“ with + in the main account, with − in the pocket; „To EUR“ with + in the pocket) and leaves out the counterpart leg. `fixRevolutPocketTransfers()` moves them after every transaction sync and before a Revolut import; the missing legs come only from the CSV import. It also moves a row whose `transactionAmount.currency` differs from the account's currency (e.g. „Exchanged to EUR Caravan“ −0.14 USD lands in the pocket) to the Revolut account in that currency. Revolut sends the text in `remittanceInformationUnstructuredArray` (no `remittanceInformationUnstructured`) — see `transactionDescription()` in the GoCardless provider.
 
 ## Key Implementation Patterns
 
@@ -162,7 +170,7 @@ All prefixed with `/api/`:
 - **Provider banking:** `GET /providers/:id/institutions`, `POST|GET /providers/:id/authorizations`, `GET|DELETE /providers/:id/authorizations/:authId`
 - **Sync:** `POST /sync/run` (SSE progress stream, body `{ mode: 'accounts'|'transactions'|'both' }` — used by the UI), `POST /sync/accounts`, `POST /sync/transactions`
 - **Accounts:** `GET /accounts`, `GET /accounts/:id`, `GET /accounts/by-institution/:pattern`, `PUT /accounts/:id/name`
-- **Transactions:** `GET /transactions` (filters: account_id, start_date, end_date, category_id, type, search, country, limit, offset), `GET /transactions/stats`, `POST /transactions` (manual), `POST /transactions/import-file` (DSK XML or Revolut CSV), `POST /transactions/categorize-by-counterparty`, `PUT /transactions/:id/category|notes|country`, `POST /transactions/:id/reprocess`
+- **Transactions:** `GET /transactions` (filters: account_id, start_date, end_date, category_id, type, search, country, limit, offset), `GET /transactions/stats`, `POST /transactions` (manual), `POST /transactions/import-file` (DSK .xls or Revolut CSV; `accountId` optional — auto-detected), `POST /transactions/reconcile-imports` (`{ dryRun }`), `POST /transactions/categorize-by-counterparty`, `PUT /transactions/:id/category|notes|country`, `POST /transactions/:id/reprocess`
 - **Categories:** CRUD at `/categories`; `/categorization-rules` CRUD + `POST /categorization-rules/apply`
 - **Reports:** `/reports/monthly` (category/counterparty/account breakdowns), `/reports/transactions`, `/reports/last-12-months`, `/reports/category-breakdown`, `/reports/counterparty`, `/reports/country`, `/reports/category-monthly`
 - **Other:** `/countries`, `/countries/:code`, `/counterparty-aliases` (CRUD), `GET /logs`, `POST /backup`, `GET /version`
@@ -171,7 +179,7 @@ All prefixed with `/api/`:
 
 - App version is in `VERSION` (`major.minor`, served by `/api/version`); `package.json` version is separate.
 - Hook `.claude/hooks/version-bump.js` bumps the minor version and stages `VERSION` on every `git commit` run through Claude Code. It is enabled in `.claude/settings.local.json` (git-ignored, so only on this machine).
-- Skills: `/restart`, `/version-up` (manual invocation only)
+- Skills: `/restart`, `/version-up` (manual invocation only), `/data-audit` (read-only data checks: `node .claude/skills/data-audit/audit.js`)
 - Agents: `backend-node-expert`, `frontend-ui-developer`, `api-docs-researcher`
 
 ## Notes

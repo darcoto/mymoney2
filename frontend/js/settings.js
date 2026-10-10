@@ -512,6 +512,76 @@ async function applyCategories() {
     }
 }
 
+// Дубликати импорт ↔ банка: първо преглед (dry run), после обединяване след потвърждение
+async function reconcileImports() {
+    let preview;
+    try {
+        showLoader();
+        preview = await api.reconcileImports(true);
+    } catch (error) {
+        showNotification('Грешка при проверката: ' + error.message, 'error');
+        return;
+    } finally {
+        hideLoader();
+    }
+
+    const holdsRemoved = preview.cardHoldsRemoved || 0;
+    const feesFixed = preview.feesFixed || 0;
+    const total = preview.pocketTransfersMoved + preview.importedMoved + preview.duplicatesMerged + holdsRemoved + feesFixed;
+    if (total === 0) {
+        showNotification('Няма дубликати и грешно разпределени транзакции', 'success');
+        return;
+    }
+
+    const rows = (preview.samples || []).map(s => `
+        <tr>
+            <td>${escapeHtml(formatDisplayDate(s.date))}</td>
+            <td>${escapeHtml(s.account)}</td>
+            <td>${escapeHtml(s.description)}</td>
+            <td class="num">${formatCurrencyExact(s.amount)}</td>
+        </tr>`).join('');
+
+    const body = `
+        <ul class="summary-list">
+            <li>🔁 Дубликати за обединяване: <strong>${preview.duplicatesMerged}</strong>
+                — остава записът от банката, категорията и бележките от файла се пренасят</li>
+            <li>🔀 Прехвърляния към джоб в Revolut за преместване: <strong>${preview.pocketTransfersMoved}</strong></li>
+            <li>🔀 Импортирани от Revolut „Спестявания“ в грешна сметка: <strong>${preview.importedMoved}</strong></li>
+            <li>💳 Блокирани суми по карти на ДСК (записани с плюс) за премахване: <strong>${holdsRemoved}</strong>
+                — осчетоводеното плащане остава${preview.cardHoldsUnmatched ? `; още ${preview.cardHoldsUnmatched} без намерено плащане остават непроменени` : ''}</li>
+            <li>💱 Стари импорти от Revolut без приспадната такса — поправка на сумата: <strong>${feesFixed}</strong></li>
+        </ul>
+        ${rows ? `
+            <p class="text-muted">Примери (до 20):</p>
+            <table class="detail-table">
+                <thead><tr><th>Дата</th><th>Сметка</th><th>Описание</th><th class="num">Сума</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>` : ''}
+        <p class="text-muted">Преди промените автоматично се създава резервно копие на базата.</p>
+    `;
+
+    openModal({
+        title: 'Дубликати от импорт',
+        body,
+        saveText: 'Обедини',
+        maxWidth: '760px',
+        onSave: async () => {
+            try {
+                await api.createBackup();
+                const result = await api.reconcileImports(false);
+                closeModal();
+                showNotification(
+                    `Обединени ${result.duplicatesMerged} дубликата, преместени ${result.pocketTransfersMoved + result.importedMoved} транзакции, премахнати ${result.cardHoldsRemoved || 0} блокирани суми, поправени ${result.feesFixed || 0} суми`,
+                    'success'
+                );
+                refreshCurrentPage();
+            } catch (error) {
+                showNotification('Грешка при обединяването: ' + error.message, 'error');
+            }
+        }
+    });
+}
+
 function renderAccountsList(accounts, providers) {
     const container = document.getElementById('accountsList');
 

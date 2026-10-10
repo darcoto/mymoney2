@@ -150,6 +150,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('addBankBtn')?.addEventListener('click', showAddBankModal);
     document.getElementById('applyCategoriesBtn')?.addEventListener('click', applyCategories);
     document.getElementById('backupBtn')?.addEventListener('click', createBackup);
+    document.getElementById('reconcileImportsBtn')?.addEventListener('click', reconcileImports);
     document.getElementById('toggleLogsBtn')?.addEventListener('click', toggleLogsPanel);
     document.getElementById('refreshLogsBtn')?.addEventListener('click', loadLogs);
 

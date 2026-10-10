@@ -2,9 +2,8 @@ const express = require('express');
 const router = express.Router();
 const database = require('../database');
 const logger = require('../logger');
-const xmlImport = require('../xml-import');
-const revolutImport = require('../revolut-import');
-const { enrichTransaction, loadRules, clearRulesCache } = require('../transaction-processor');
+const fileImport = require('../file-import');
+const { reconcileImportedTransactions } = require('../transaction-matching');
 const { apiError } = require('./helpers');
 
 router.get('/', async (req, res) => {
@@ -230,74 +229,34 @@ router.post('/:id/reprocess', async (req, res) => {
 // Import transactions from file (auto-detect parser based on account institution)
 router.post('/import-file', async (req, res) => {
   try {
-    const { fileContent, accountId, currency } = req.body;
+    const { fileContent, accountId } = req.body;
 
     if (!fileContent) {
       return res.status(400).json({ error: 'Съдържанието на файла е задължително' });
     }
-    if (!accountId) {
-      return res.status(400).json({ error: 'Сметката е задължителна' });
-    }
 
-    const account = await database.getAccountById(accountId);
-    if (!account) {
-      return res.status(404).json({ error: 'Сметката не е намерена' });
-    }
-
-    const institutionName = (account.institution_name || '').toUpperCase();
-    let transactions = [];
-    let parserName = '';
-
-    if (institutionName.includes('DSK')) {
-      parserName = 'DSK Bank (XML)';
-      transactions = xmlImport.processXmlForImport(fileContent, accountId, currency || 'BGN');
-    } else if (institutionName.includes('REVOLUT')) {
-      parserName = 'Revolut (CSV)';
-      transactions = revolutImport.processCsvForImport(fileContent, accountId);
-    } else {
-      return res.status(400).json({
-        error: `Не се поддържа импорт за банка "${account.institution_name}". Поддържани банки: DSK Bank, Revolut`
-      });
-    }
-
-    logger.info(`[File Import] Using parser: ${parserName} for account ${accountId}`);
-
-    if (transactions.length === 0) {
-      return res.json({
-        success: true,
-        imported: 0,
-        skipped: 0,
-        categorized: 0,
-        errors: [],
-        total: 0,
-        parser: parserName,
-        message: 'Няма намерени транзакции във файла'
-      });
-    }
-
-    await loadRules();
-    let categorizedCount = 0;
-    for (const tx of transactions) {
-      await enrichTransaction(tx);
-      if (tx.categoryId) categorizedCount++;
-    }
-    clearRulesCache();
-
-    const results = await database.importTransactionsBatch(transactions);
-
-    logger.info(`[File Import] ${parserName}: Imported ${results.imported}, skipped ${results.skipped}, categorized ${categorizedCount}, errors: ${results.errors.length}`);
-
-    res.json({
-      success: true,
-      imported: results.imported,
-      skipped: results.skipped,
-      categorized: categorizedCount,
-      errors: results.errors,
-      total: transactions.length,
-      parser: parserName
-    });
+    // accountId е по избор — без него сметката се разпознава по файла
+    const result = await fileImport.importFile({ fileContent, accountId: accountId || null });
+    logger.info(`[File Import] ${result.parser}: imported ${result.imported}, same ID ${result.skipped}, duplicates ${result.duplicates}, moved ${result.moved}, errors ${result.errors.length}`);
+    res.json(result);
   } catch (error) {
     logger.error(`[File Import] Error: ${error.message}`);
+    // Грешките от разпознаването на файла/сметката (на български) са за потребителя
+    if (/[а-яА-Я]/.test(error.message)) {
+      return res.status(400).json({ error: error.message });
+    }
+    apiError(res, error);
+  }
+});
+
+// Обединяване на дубликати между импортирани от файл и банкови транзакции.
+// dryRun (по подразбиране) само показва какво би се променило.
+router.post('/reconcile-imports', async (req, res) => {
+  try {
+    const dryRun = req.body.dryRun !== false;
+    const result = await reconcileImportedTransactions({ dryRun });
+    res.json({ success: true, dryRun, ...result });
+  } catch (error) {
     apiError(res, error);
   }
 });

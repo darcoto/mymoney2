@@ -4,6 +4,19 @@ const database = require('../database');
 const logger = require('../logger');
 const providerRegistry = require('../providers/provider-registry');
 const { apiError } = require('./helpers');
+const { reconcileImportedTransactions } = require('../transaction-matching');
+
+// След всяка синхронизация: транзакциите, които вече са били импортирани от файл, се обединяват
+// с банковите (остава банковият запис, категорията и бележките се пренасят); Revolut прехвърлянията
+// към джоба отиват в правилната сметка; блокираните суми по карти на ДСК се премахват
+async function reconcileSafely() {
+  try {
+    return await reconcileImportedTransactions({ dryRun: false });
+  } catch (error) {
+    logger.error('Post-sync reconcile failed:', error.message);
+    return null;
+  }
+}
 
 router.post('/accounts', async (req, res) => {
   try {
@@ -87,7 +100,8 @@ router.post('/transactions', async (req, res) => {
       }
     }
 
-    res.json({ success: true, transactionsSynced: totalSynced, byAccount });
+    const reconciled = await reconcileSafely();
+    res.json({ success: true, transactionsSynced: totalSynced, byAccount, reconciled });
   } catch (error) {
     apiError(res, error);
   }
@@ -158,6 +172,20 @@ router.post('/run', async (req, res) => {
           send({ type: 'step', icon, text: `${name}: ${count} нови транзакции` });
         } catch (error) {
           send({ type: 'step', icon: '❌', text: `${name}: ${error.message}` });
+        }
+      }
+
+      const reconciled = await reconcileSafely();
+      if (reconciled) {
+        if (reconciled.duplicatesMerged > 0) {
+          send({ type: 'step', icon: '🔁', text: `${reconciled.duplicatesMerged} транзакции, импортирани по-рано от файл, обединени с банковите` });
+        }
+        const moved = reconciled.pocketTransfersMoved + reconciled.importedMoved;
+        if (moved > 0) {
+          send({ type: 'step', icon: '🔀', text: `Revolut: ${moved} транзакции преместени в правилната сметка (джоб)` });
+        }
+        if (reconciled.cardHoldsRemoved > 0) {
+          send({ type: 'step', icon: '💳', text: `ДСК: ${reconciled.cardHoldsRemoved} блокирани суми по карти премахнати` });
         }
       }
     }

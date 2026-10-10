@@ -7,6 +7,7 @@ const database = require('../database');
 const logger = require('../logger');
 const config = require('../config');
 const { processTransactionBatch } = require('../transaction-processor');
+const { isDskCardHold } = require('../transaction-matching');
 
 const BASE_URL = 'https://bankaccountdata.gocardless.com';
 const BGN_TO_EUR_RATE = 1.95583;
@@ -43,6 +44,19 @@ function describeApiError(error) {
     return `GoCardless (${status}): ${apiText || error.message}`;
   }
   return error.message;
+}
+
+// Описание: ДСК изпраща remittanceInformationUnstructured, Revolut — масив (напр. ["From Anna D", "пожарна"])
+function transactionDescription(tx) {
+  return tx.remittanceInformationUnstructured
+    || (tx.remittanceInformationUnstructuredArray || []).join(' ')
+    || tx.additionalInformation || '';
+}
+
+// Контрагент: получателят при плащане, наредителят при постъпление
+function transactionCounterparty(tx) {
+  const amount = parseFloat(tx.transactionAmount.amount);
+  return (amount < 0 ? tx.creditorName : tx.debtorName) || (tx.remittanceInformationUnstructuredArray || []).join(' ');
 }
 
 // Ключ за разпознаване на една и съща банкова транзакция, ако ID-то ѝ се е сменило
@@ -588,7 +602,12 @@ class GoCardlessProvider extends BaseProvider {
       logger.debug('[GoCardless] syncAccountTransactions', { accountId, dateFrom: dateFromStr });
 
       const transactionsData = await this.getTransactions(accountId, dateFromStr);
-      const rawTransactions = transactionsData.booked || [];
+      // ДСК връща блокираните суми по карти като осчетоводени (с плюс) — плащането идва отделно
+      const allBooked = transactionsData.booked || [];
+      const rawTransactions = allBooked.filter(tx => !isDskCardHold(tx));
+      if (rawTransactions.length < allBooked.length) {
+        logger.info(`[GoCardless] Skipped ${allBooked.length - rawTransactions.length} card holds (blocked amounts) for account ${accountId}`);
+      }
 
       const transactions = rawTransactions.map(tx => {
         const originalAmount = parseFloat(tx.transactionAmount.amount);
@@ -604,8 +623,8 @@ class GoCardlessProvider extends BaseProvider {
           currency: 'EUR',
           originalAmount: originalCurrency !== 'EUR' ? originalAmount : null,
           originalCurrency: originalCurrency !== 'EUR' ? originalCurrency : null,
-          description: tx.remittanceInformationUnstructured || tx.additionalInformation || '',
-          counterpartyName: (originalAmount < 0 ? tx.creditorName : tx.debtorName) || (tx.remittanceInformationUnstructuredArray || []).join(' '),
+          description: transactionDescription(tx),
+          counterpartyName: transactionCounterparty(tx),
           rawData: JSON.stringify(tx)
         };
       });
@@ -622,3 +641,5 @@ class GoCardlessProvider extends BaseProvider {
 }
 
 module.exports = GoCardlessProvider;
+module.exports.transactionDescription = transactionDescription;
+module.exports.transactionCounterparty = transactionCounterparty;
