@@ -43,8 +43,15 @@ class Dashboard {
                 api.getTransactionStats(formatDate(startOfMonth), formatDate(endOfMonth))
             ]);
 
-            const totalBalance = accounts.reduce((sum, acc) => sum + (acc.balance || 0), 0);
+            // При кредитните карти банката връща наличния лимит, не собствени пари — показва се отделно
+            const ownAccounts = accounts.filter(acc => !isCreditCardAccount(acc));
+            const creditCards = accounts.filter(isCreditCardAccount);
+            const totalBalance = ownAccounts.reduce((sum, acc) => sum + (acc.balance || 0), 0);
+            const availableCredit = creditCards.reduce((sum, acc) => sum + (acc.balance || 0), 0);
             document.getElementById('totalBalance').innerHTML = formatCurrency(totalBalance);
+            document.getElementById('totalBalanceNote').innerHTML = creditCards.length
+                ? `Без кредитните карти (наличен лимит ${formatCurrency(availableCredit)})`
+                : 'Всички сметки';
 
             const income = stats.total_income || 0;
             const expenses = stats.total_expenses || 0;

@@ -7,6 +7,11 @@ function formatCurrency(amount) {
     return `${sign}${formatted} <span class="currency-symbol">€</span>`;
 }
 
+// Кредитна карта: банката (ДСК) връща като наличност наличния кредитен лимит, не собствени пари
+function isCreditCardAccount(account) {
+    return /КРЕДИТНА КАРТА|CREDIT CARD/i.test(`${account.name || ''} ${account.custom_name || ''}`);
+}
+
 function formatCurrencyExact(amount) {
     const absAmount = Math.abs(amount).toFixed(2);
     const formatted = absAmount.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');

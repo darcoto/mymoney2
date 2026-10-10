@@ -348,6 +348,27 @@ class APIClient {
         return this.request(`/reports/country?${params.toString()}`);
     }
 
+    // Аналитични справки
+    async getCashFlowReport(months = 24) {
+        return this.request(`/reports/cash-flow?months=${months}`);
+    }
+
+    async getRecurringReport() {
+        return this.request('/reports/recurring');
+    }
+
+    async getYearComparisonReport(year, month, mode = 'month') {
+        return this.request(`/reports/year-comparison?year=${year}&month=${month}&mode=${mode}`);
+    }
+
+    async getBankCostsReport() {
+        return this.request('/reports/bank-costs');
+    }
+
+    async getTripsReport() {
+        return this.request('/reports/trips');
+    }
+
     async getCategoryMonthlyReport(types = ['expense']) {
         const params = new URLSearchParams();
         types.forEach(type => params.append('types', type));

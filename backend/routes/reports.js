@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const database = require('../database');
 const countryUtils = require('../country-codes');
+const insights = require('../insights');
 const { apiError } = require('./helpers');
 
 router.get('/monthly', async (req, res) => {
@@ -99,6 +100,53 @@ router.get('/country', async (req, res) => {
       years: report.years,
       countries: enrichedCountries
     });
+  } catch (error) {
+    apiError(res, error);
+  }
+});
+
+// ─── Аналитични справки (backend/insights.js) ────────────────────────────────
+
+router.get('/cash-flow', async (req, res) => {
+  try {
+    const months = Math.min(Math.max(parseInt(req.query.months, 10) || 24, 3), 60);
+    res.json(await insights.getCashFlow(months));
+  } catch (error) {
+    apiError(res, error);
+  }
+});
+
+router.get('/recurring', async (req, res) => {
+  try {
+    res.json(await insights.getRecurringPayments());
+  } catch (error) {
+    apiError(res, error);
+  }
+});
+
+router.get('/year-comparison', async (req, res) => {
+  try {
+    const now = new Date();
+    const year = parseInt(req.query.year, 10) || now.getFullYear();
+    const month = Math.min(Math.max(parseInt(req.query.month, 10) || now.getMonth() + 1, 1), 12);
+    const mode = req.query.mode === 'ytd' ? 'ytd' : 'month';
+    res.json(await insights.getYearComparison(year, month, mode));
+  } catch (error) {
+    apiError(res, error);
+  }
+});
+
+router.get('/bank-costs', async (req, res) => {
+  try {
+    res.json(await insights.getBankCosts());
+  } catch (error) {
+    apiError(res, error);
+  }
+});
+
+router.get('/trips', async (req, res) => {
+  try {
+    res.json(await insights.getTrips());
   } catch (error) {
     apiError(res, error);
   }

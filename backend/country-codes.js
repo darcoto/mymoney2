@@ -133,7 +133,28 @@ function isValidCountryCode(code) {
  */
 function getCountryInfo(code) {
     if (!code) return null;
-    return COUNTRY_CODES[code.toUpperCase()] || null;
+    const info = COUNTRY_CODES[code.toUpperCase()];
+    return info ? { ...info, name: localizedName(info) } : null;
+}
+
+// Имената са на английски; българското идва от Intl по двубуквения код, който е в емоджито на флага
+let regionNames = null;
+try {
+    regionNames = new Intl.DisplayNames(['bg'], { type: 'region' });
+} catch (e) {
+    regionNames = null;
+}
+
+function localizedName(info) {
+    if (!regionNames || !info.flag) return info.name;
+    const alpha2 = [...info.flag].map(ch => String.fromCharCode(ch.codePointAt(0) - 0x1F1E6 + 65)).join('');
+    if (!/^[A-Z]{2}$/.test(alpha2)) return info.name;
+    try {
+        const name = regionNames.of(alpha2);
+        return name && name !== alpha2 ? name : info.name;
+    } catch (e) {
+        return info.name;
+    }
 }
 
 /**
@@ -159,7 +180,7 @@ function extractCountryFromCounterparty(counterpartyName) {
 function getAllCountries() {
     return Object.entries(COUNTRY_CODES).map(([code, info]) => ({
         code,
-        name: info.name,
+        name: localizedName(info),
         flag: info.flag
     }));
 }

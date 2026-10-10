@@ -265,6 +265,21 @@ async function main() {
     ownWrong.length ? problem(`преводи между собствени сметки без категория тип „transfer“: ${ownWrong.length} от ${own.length}`) : ok(`преводите между собствени сметки (${own.length}) са с категория за преводи`);
     ownWrong.slice(0, 8).forEach(r => console.log(`      ${label(r.account_id)} ${r.transaction_date} ${r.amount} „${(r.description || '').slice(0, 50)}“ → ${(catById.get(r.category_id) || {}).name || 'без категория'}`));
 
+    // Преводи от/към собственото име (имената от „МЕЖДУ МОИ СМЕТКИ“/„ПОГАСЯВАНЕ“ + латиница),
+    // които не са с категория за преводи — напр. „Payment from <собствено име>“ в Revolut
+    const translit = s => s.replace(/[А-Я]/g, ch => ({ А: 'A', Б: 'B', В: 'V', Г: 'G', Д: 'D', Е: 'E', Ж: 'ZH', З: 'Z', И: 'I', Й: 'Y', К: 'K', Л: 'L', М: 'M', Н: 'N', О: 'O', П: 'P', Р: 'R', С: 'S', Т: 'T', У: 'U', Ф: 'F', Х: 'H', Ц: 'TS', Ч: 'CH', Ш: 'SH', Щ: 'SHT', Ъ: 'A', Ь: 'Y', Ю: 'YU', Я: 'YA' })[ch] || ch);
+    const ownerNames = new Set();
+    real.filter(r => /МЕЖДУ МОИ СМЕТКИ|ПОГАСЯВАНЕ НА ЗАДЪЛЖЕНИЕ/i.test(r.description || '') && r.counterparty_name)
+        .forEach(r => { const n = r.counterparty_name.toUpperCase().replace(/\s+/g, ' ').trim(); ownerNames.add(n); ownerNames.add(translit(n)); });
+    const ownNamed = real.filter(r => {
+        const text = `${r.counterparty_name || ''} ${r.description || ''}`.toUpperCase().replace(/\s+/g, ' ');
+        return [...ownerNames].some(n => text.includes(n))
+            && !/ТАКСА|ЛИХВ|ТОЧКИ/i.test(r.description || '')
+            && (catById.get(r.category_id) || {}).type !== 'transfer';
+    });
+    ownNamed.length ? problem(`преводи от/към собственото име без категория за преводи: ${ownNamed.length}`) : ok('преводите от/към собственото име са с категория за преводи');
+    ownNamed.slice(0, 8).forEach(r => console.log(`      ${label(r.account_id)} ${r.transaction_date} ${r.amount} „${(r.description || '').slice(0, 50)}“ → ${(catById.get(r.category_id) || {}).name || 'без категория'}`));
+
     const incomeOnExpense = real.filter(r => r.amount < 0 && (catById.get(r.category_id) || {}).type === 'income');
     if (incomeOnExpense.length) {
         const g = {};

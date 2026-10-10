@@ -97,6 +97,8 @@ const ACTION_HANDLERS = {
     'country-tx': d => showCountryTransactions(d.countryCode, d.countryName),
     'report-row-tx': d => showReportRowTransactions(d.reportKey, Number(d.index)),
     'tx-overlay': d => showTransactionOverlay(Number(d.index)),
+    'insight-tx': d => showInsightTransactions(d.insightKey, Number(d.index)),
+    'compare-tx': d => showCompareTransactions(Number(d.index), d.period),
 
     // Настройки
     'provider-credentials': d => showProviderCredentialsModal(Number(d.providerId)),

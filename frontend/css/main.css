@@ -986,3 +986,47 @@ body {
     border: 1px solid var(--danger);
     color: var(--danger);
 }
+
+/* ─── Аналитични справки (insights.js) ─── */
+.insight-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.insight-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px 16px;
+}
+.insight-card .insight-label { font-size: 0.85em; color: var(--text-muted); }
+.insight-card .insight-value { font-size: 1.4em; font-weight: 600; margin-top: 4px; }
+.insight-card .insight-sub { font-size: 0.8em; color: var(--text-muted); margin-top: 2px; }
+.insight-chart { position: relative; height: 300px; margin-bottom: 12px; }
+.insight-note { font-size: 0.85em; margin: 0 0 12px; }
+.insight-subtitle { margin: 20px 0 8px; }
+.insight-muted-row td { color: var(--text-muted); }
+.insight-tag {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 0.8em;
+    background: var(--border-color);
+    white-space: nowrap;
+}
+.insight-tag.warn { background: #fff3e0; color: #e65100; }
+.trip-card {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+}
+.trip-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.trip-title { font-weight: 600; font-size: 1.05em; }
+.trip-total { font-weight: 600; font-size: 1.15em; }
+.trip-meta { color: var(--text-muted); font-size: 0.85em; margin: 2px 0 8px; }
+.trip-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin-bottom: 8px; }
+.trip-bar span { display: block; height: 100%; }
+.trip-cats { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.85em; }
+.trip-cats .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }

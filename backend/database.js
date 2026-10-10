@@ -1467,5 +1467,6 @@ module.exports = {
   getAccountsByProvider,
   // Low-level helpers (for advanced queries in routes)
   runQuery,
-  getQuery
+  getQuery,
+  allQuery
 };

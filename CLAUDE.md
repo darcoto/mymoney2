@@ -54,6 +54,7 @@ PORT=3499 DATABASE_NAME=zz-test.db node backend/server.js
 | `file-import.js` | File import entry point: detects the format by content (DSK `.xls`, Revolut CSV), resolves the account(s), drops duplicates, saves |
 | `dsk-import.js` | DSK „Excel“ export parser (HTML table — account number, type, reference, FX). IDs are the same as the former XML import (XML support was removed — no account info, no type) |
 | `revolut-import.js` | Revolut CSV parser (product, fee, balance, start/completion time; approximate currency-to-EUR rates) |
+| `insights.js` | Analytical reports: cash flow / savings rate, recurring payments, year-over-year comparison, bank costs, trips abroad |
 | `transaction-matching.js` | Matching file ↔ bank transactions, Revolut account resolution, Revolut pocket fix, `reconcileImportedTransactions()` |
 | `country-codes.js` | ISO 3166-1 alpha-3 codes with flag emojis; extracts country from counterparty names |
 | `config.js` | Configuration loader (`port`, `databasePath`, `nodeEnv`) |
@@ -74,7 +75,7 @@ Routes in `backend/routes/`: `providers.js`, `sync.js`, `accounts.js`, `transact
 ### Frontend (`frontend/`)
 
 - **SPA:** single `index.html`, page routing via `data-page` attributes and URL hash
-- **Scripts:** classic `<script>` tags sharing the global scope (no modules, no bundler). Load order in `index.html` matters: `api-client` → `utils` → `modal` → `transaction-details` → `charts` → `dashboard` → `transactions` → `import` → `categories` → `reports` → `settings` → `sync` → `app` (last).
+- **Scripts:** classic `<script>` tags sharing the global scope (no modules, no bundler). Load order in `index.html` matters: `api-client` → `utils` → `modal` → `transaction-details` → `charts` → `dashboard` → `transactions` → `import` → `categories` → `reports` → `insights` → `settings` → `sync` → `app` (last).
 
 | File | Purpose |
 |------|---------|
@@ -83,6 +84,7 @@ Routes in `backend/routes/`: `providers.js`, `sync.js`, `accounts.js`, `transact
 | `modal.js` | `openModal` / `closeModal` / `updateModal` / `isModalOpen` and `openOverlay` / `closeOverlay` — the only way to use `#modal` / `#overlayModal`; they reset state, handle Escape, backdrop, Enter-to-save, autofocus and double-submit |
 | `transaction-details.js` | Shared "Детайли на транзакция" view (`renderTransactionDetails`, `bindTransactionDetails`) used by the transactions page and report lists |
 | `transactions.js` | Transactions page (`transactionsPage`), filters, pagination, details modal (`showRawData`) |
+| `insights.js` | Analytical report tabs (registers into `REPORT_SECTIONS`); lists behind rows via `data-action="insight-tx"` / `"compare-tx"` |
 | `reports.js` | All reports; `reportState`; `openTransactionsListModal(title, transactions, { showCategory, note })` and `showTransactionOverlay(index)` |
 | `categories.js`, `settings.js`, `sync.js`, `import.js`, `dashboard.js`, `charts.js` | Their pages / dialogs |
 | `app.js` | Routing (`navigateToPage` returns a promise), `refreshCurrentPage`, `ACTION_HANDLERS`, init (incl. `?ref=` return from the bank) |
@@ -155,6 +157,8 @@ Bank-API transactions have JSON `raw_data` with `transactionAmount`; queries use
 **Reports:**
 - Report filters live in `appendReportFilters()` in `database.js` (period, types, category). Uncategorized transactions count as `expense`.
 - `GET /reports/transactions` returns the transactions behind a report row using the same filters, so counts and lists match. Keep both sides on the shared helper when changing a report.
+- Analytics (`insights.js`) sum by category type, net of refunds (a refund in an expense category lowers the expense); a negative amount in an income category (e.g. Trading 212 in „Инвестиции“) is shown as „invested“ and is part of savings. Trips use the purchase date from the card text (DSK settles 1–5 days later). In SQL, don't alias a computed column as `type` and `GROUP BY` it — SQLite groups by the `c.type` column instead.
+- Credit cards (`isCreditCardAccount()` in `utils.js`): DSK returns the available credit limit as the balance — the dashboard total leaves them out.
 
 ## Environment Variables
 
@@ -172,7 +176,7 @@ All prefixed with `/api/`:
 - **Accounts:** `GET /accounts`, `GET /accounts/:id`, `GET /accounts/by-institution/:pattern`, `PUT /accounts/:id/name`
 - **Transactions:** `GET /transactions` (filters: account_id, start_date, end_date, category_id, type, search, country, limit, offset), `GET /transactions/stats`, `POST /transactions` (manual), `POST /transactions/import-file` (DSK .xls or Revolut CSV; `accountId` optional — auto-detected), `POST /transactions/reconcile-imports` (`{ dryRun }`), `POST /transactions/categorize-by-counterparty`, `PUT /transactions/:id/category|notes|country`, `POST /transactions/:id/reprocess`
 - **Categories:** CRUD at `/categories`; `/categorization-rules` CRUD + `POST /categorization-rules/apply`
-- **Reports:** `/reports/monthly` (category/counterparty/account breakdowns), `/reports/transactions`, `/reports/last-12-months`, `/reports/category-breakdown`, `/reports/counterparty`, `/reports/country`, `/reports/category-monthly`
+- **Reports:** `/reports/monthly` (category/counterparty/account breakdowns), `/reports/transactions`, `/reports/last-12-months`, `/reports/category-breakdown`, `/reports/counterparty`, `/reports/country`, `/reports/category-monthly`; analytics (`insights.js`): `/reports/cash-flow`, `/reports/recurring`, `/reports/year-comparison?year&month&mode=month|ytd`, `/reports/bank-costs` (category „Банкови“), `/reports/trips`
 - **Other:** `/countries`, `/countries/:code`, `/counterparty-aliases` (CRUD), `GET /logs`, `POST /backup`, `GET /version`
 
 ## Versioning & Claude Code Setup

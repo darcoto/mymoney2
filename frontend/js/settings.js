@@ -630,7 +630,7 @@ function renderAccountsList(accounts, providers) {
                                 <td style="font-size: 12px; color: var(--text-secondary);">${escapeHtml(identifier)}</td>
                                 <td style="font-size: 12px; color: var(--text-muted);">${escapeHtml(authId)}</td>
                                 <td style="font-size: 12px;">${lastSyncedText}</td>
-                                <td style="text-align: right; font-weight: 600;">${formatCurrency(account.balance || 0)}</td>
+                                <td style="text-align: right; font-weight: 600;">${formatCurrency(account.balance || 0)}${isCreditCardAccount(account) ? '<br><small class="text-muted" style="font-weight: 400;">наличен лимит</small>' : ''}</td>
                             </tr>
                         `;
                     }).join('')}
