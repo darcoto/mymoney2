@@ -18,6 +18,8 @@ Group=mymoney
 WorkingDirectory=/opt/mymoney2
 Environment=NODE_ENV=production
 Environment=PORT=3456
+# Само локално — отвън се влиза през reverse proxy (nginx) с TLS
+Environment=HOST=127.0.0.1
 ExecStart=/usr/bin/node backend/server.js
 Restart=always
 RestartSec=5

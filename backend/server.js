@@ -226,8 +226,9 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
-app.listen(config.port, () => {
-  console.log(`MyMoney2 server running on http://localhost:${config.port} (all network interfaces)`);
+app.listen(config.port, config.host, () => {
+  const where = config.host === "0.0.0.0" ? "all network interfaces" : config.host;
+  console.log(`MyMoney2 server running on http://localhost:${config.port} (${where})`);
   console.log(`Database: ${config.databaseName} (${config.databasePath})`);
   console.log(`Environment: ${config.nodeEnv}`);
 });
