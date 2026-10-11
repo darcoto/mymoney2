@@ -224,15 +224,15 @@ async function generateCompareReport() {
         // Списъците зад клетките: [категория][период]
         const lists = [];
         const periods = { current: report.current, previous: report.previous };
-        const row = (r, isExpense) => {
+        const row = (r, isExpense, trAttrs = '') => {
             const index = lists.length;
             lists.push(r);
             const cell = (field) => r[field]
                 ? `<a href="javascript:void(0)" class="link-dotted" data-action="compare-tx" data-index="${index}" data-period="${field}" title="Покажи транзакциите">${formatCurrency(r[field])}</a>`
                 : '-';
             return `
-                <tr>
-                    <td><span class="category-badge" style="background-color: ${r.color};">${escapeHtml(r.name)}</span></td>
+                <tr ${trAttrs}>
+                    <td>${categoryGroupToggle(r)}<span class="category-badge" style="background-color: ${r.color};">${escapeHtml(r.name)}</span></td>
                     <td class="num">${cell('previous')}</td>
                     <td class="num">${cell('current')}</td>
                     <td class="num ${diffClass(r.diff, isExpense)}">${r.diff > 0 ? '+' : ''}${formatCurrency(r.diff)}</td>
@@ -249,8 +249,8 @@ async function generateCompareReport() {
             </tr>`;
 
         document.querySelector('#compareTable tbody').innerHTML =
-            groupRow('💸 Разходи', expense, true) + report.expenses.map(r => row(r, true)).join('') +
-            groupRow('💰 Приходи', income, false) + report.income.map(r => row(r, false)).join('');
+            groupRow('💸 Разходи', expense, true) + renderGroupedRows(report.expenses, (r, attrs) => row(r, true, attrs)) +
+            groupRow('💰 Приходи', income, false) + renderGroupedRows(report.income, (r, attrs) => row(r, false, attrs));
 
         insightState.compare = { lists, periods };
     });

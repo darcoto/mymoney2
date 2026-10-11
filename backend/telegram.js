@@ -197,21 +197,43 @@ async function suggestCategories(tx, limit = SUGGESTIONS) {
         GROUP BY t.category_id ORDER BY n DESC LIMIT 12`, [negative]);
     recent.forEach(r => add(r.category_id, false));
 
+    // Групите не се предлагат — транзакцията отива в подкатегория
     const categories = await database.getAllCategories();
-    return found.slice(0, limit)
+    const groups = childrenByGroup(categories);
+    return found
         .map(f => ({ category: categories.find(c => c.id === f.id), confident: f.confident }))
-        .filter(f => f.category);
+        .filter(f => f.category && !groups.has(f.category.id))
+        .slice(0, limit);
 }
 
-/** Всички категории — най-използваните за тази посока първи */
-async function allCategoriesSorted(tx) {
+/** Групите на категориите (id на група → подкатегориите ѝ) */
+function childrenByGroup(categories) {
+    const map = new Map();
+    categories.filter(c => c.parent_id).forEach(c => {
+        if (!map.has(c.parent_id)) map.set(c.parent_id, []);
+        map.get(c.parent_id).push(c);
+    });
+    return map;
+}
+
+/**
+ * Категориите на едно ниво — най-използваните за тази посока първи.
+ * parentId: null — горното ниво (групите и самостоятелните), иначе подкатегориите на групата.
+ */
+async function categoriesSorted(tx, parentId = null) {
     const negative = tx.amount < 0 ? 1 : 0;
     const usage = await database.allQuery(`
         SELECT category_id, COUNT(*) AS n FROM transactions
         WHERE category_id IS NOT NULL AND (amount < 0) = ? GROUP BY category_id`, [negative]);
     const count = new Map(usage.map(u => [u.category_id, u.n]));
     const categories = await database.getAllCategories();
-    return categories.sort((a, b) => (count.get(b.id) || 0) - (count.get(a.id) || 0) || a.name.localeCompare(b.name, 'bg'));
+    const children = childrenByGroup(categories);
+    // Използването на група — сборът на подкатегориите ѝ
+    const used = c => (count.get(c.id) || 0) + (children.get(c.id) || []).reduce((s, ch) => s + (count.get(ch.id) || 0), 0);
+    return categories
+        .filter(c => (c.parent_id || null) === parentId)
+        .map(c => ({ ...c, isGroup: children.has(c.id) }))
+        .sort((a, b) => used(b) - used(a) || a.name.localeCompare(b.name, 'bg'));
 }
 
 function categoryButton(nid, category, star = false) {
@@ -231,20 +253,37 @@ async function mainKeyboard(nid, tx, suggestions = null) {
     return { inline_keyboard: rows };
 }
 
+// Група → бутон, който отваря подкатегориите ѝ
+function groupButton(nid, group) {
+    return { text: `${fmt.categoryLabel(group)} ›`, callback_data: `g:${nid}:${group.id}` };
+}
+
+/** „Всички категории“: групите и самостоятелните категории, на страници */
 async function moreKeyboard(nid, tx, page) {
-    const all = (await allCategoriesSorted(tx)).filter(c => c.id !== tx.category_id);
+    const all = (await categoriesSorted(tx)).filter(c => c.id !== tx.category_id);
     const pages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
     const p = Math.min(Math.max(page, 0), pages - 1);
     const items = all.slice(p * PAGE_SIZE, (p + 1) * PAGE_SIZE);
     const rows = [];
     for (let i = 0; i < items.length; i += 2) {
-        rows.push(items.slice(i, i + 2).map(c => categoryButton(nid, c)));
+        rows.push(items.slice(i, i + 2).map(c => c.isGroup ? groupButton(nid, c) : categoryButton(nid, c)));
     }
     const nav = [];
     if (p > 0) nav.push({ text: '◀', callback_data: `m:${nid}:${p - 1}` });
     nav.push({ text: `↩ Назад${pages > 1 ? ` (${p + 1}/${pages})` : ''}`, callback_data: `b:${nid}` });
     if (p < pages - 1) nav.push({ text: '▶', callback_data: `m:${nid}:${p + 1}` });
     rows.push(nav);
+    return { inline_keyboard: rows };
+}
+
+/** Подкатегориите на група; „↩“ — обратно към групите */
+async function groupKeyboard(nid, tx, groupId) {
+    const items = (await categoriesSorted(tx, groupId)).filter(c => c.id !== tx.category_id);
+    const rows = [];
+    for (let i = 0; i < items.length; i += 2) {
+        rows.push(items.slice(i, i + 2).map(c => categoryButton(nid, c)));
+    }
+    rows.push([{ text: '↩ Всички категории', callback_data: `m:${nid}:0` }]);
     return { inline_keyboard: rows };
 }
 
@@ -436,6 +475,9 @@ async function handleCallback(query) {
         }
         case 'm':
             await call('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, reply_markup: await moreKeyboard(nid, tx, Number(arg) || 0) });
+            return answer();
+        case 'g':
+            await call('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, reply_markup: await groupKeyboard(nid, tx, Number(arg)) });
             return answer();
         case 'b':
             await call('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, reply_markup: await mainKeyboard(nid, tx) });

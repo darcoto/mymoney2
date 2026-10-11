@@ -299,6 +299,18 @@ async function main() {
     const broken = [...cats.filter(c => /\?{2,}/.test(`${c.name}${c.icon || ''}`)).map(c => `категория #${c.id} „${c.name}“`),
         ...rules.filter(r => /\?{2,}/.test(r.pattern)).map(r => `правило #${r.id} „${r.pattern}“`)];
     broken.length ? problem(`повреден текст („??“): ${broken.join(', ')}`) : ok('имената на категориите и правилата са четими');
+
+    // Групи (parent_id): транзакциите и правилата сочат към подкатегория, групата само обобщава
+    const groupIds = new Set(cats.filter(c => c.parent_id).map(c => c.parent_id));
+    const inGroup = all.filter(r => groupIds.has(r.category_id));
+    const rulesToGroup = rules.filter(r => groupIds.has(r.category_id));
+    const nested = cats.filter(c => c.parent_id && groupIds.has(c.id));
+    const groupIssues = [
+        inGroup.length && `${inGroup.length} транзакции директно в група`,
+        rulesToGroup.length && `правила към група: ${rulesToGroup.map(r => `#${r.id} → ${r.category}`).join(', ')}`,
+        nested.length && `група в група: ${nested.map(c => c.name).join(', ')}`
+    ].filter(Boolean);
+    groupIssues.length ? problem(`групи категории: ${groupIssues.join('; ')}`) : ok(`групите категории (${groupIds.size}) са само за обобщение`);
     // Шаблонът е подниз без граници на думи — къс шаблон хваща кодове за авторизация, номера на магистрали и т.н.
     const texts = all.map(t => `${t.description || ''} ${t.counterparty_name || ''}`.toUpperCase());
     const escape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

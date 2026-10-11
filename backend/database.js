@@ -3,6 +3,7 @@ const config = require('./config');
 const path = require('path');
 const fs = require('fs');
 const logger = require('./logger');
+const { categoryFilterSql, groupRows } = require('./category-groups');
 
 let db = null;
 
@@ -508,8 +509,9 @@ async function getTransactions(filters = {}) {
     if (filters.categoryId === 'uncategorized') {
       baseQuery += ' AND t.category_id IS NULL';
     } else {
-      baseQuery += ' AND t.category_id = ?';
-      params.push(filters.categoryId);
+      // Група — с подкатегориите
+      baseQuery += ` AND ${categoryFilterSql()}`;
+      params.push(filters.categoryId, filters.categoryId);
     }
   }
 
@@ -701,8 +703,8 @@ async function getTransactionStats(startDate, endDate, types = null, categoryId 
 
   // Filter by specific category
   if (categoryId) {
-    query += ' AND t.category_id = ?';
-    params.push(categoryId);
+    query += ` AND ${categoryFilterSql()}`;
+    params.push(categoryId, categoryId);
   }
 
   return await getQuery(query, params);
@@ -735,7 +737,7 @@ const CATEGORY_EMOJI = {
   'абонаменти': '📺', 'автопарк': '🚙', 'алдовски': '🐶', 'банкови': '🏛️', 'в брой': '💵',
   'дарение': '🤝', 'детски': '👶', 'джаджи': '🎧', 'домакинство': '🧺', 'други разходи': '📦',
   'забавления': '🎬', 'застраховки': '🛡️', 'здраве': '💊', 'комунални услуги': '🏠', 'кофис': '☕',
-  'лизинг и дългове': '🏦', 'морето': '🏖️', 'облекло': '👕', 'образование': '🎓', 'под наем': '🔑',
+  'лизинг и дългове': '🏦', 'морето': '🏖️', 'семеен бюджет': '💞', 'облекло': '👕', 'образование': '🎓', 'под наем': '🔑',
   'подаръци': '🎁', 'пътешествия': '✈️', 'работа обяд': '🍱', 'служебни': '💼', 'телекомуникации': '📱',
   'транспорт': '🚗', 'храна и напитки': '🍔', 'други приходи': '➕', 'заплата': '💰', 'инвестиции': '📈',
   'подарък': '🎁', 'фрийланс': '💻', 'между сметки': '🔄', 'спестявания': '🐷'
@@ -767,6 +769,8 @@ async function deleteCategory(id) {
   await runQuery('UPDATE transactions SET category_id = NULL WHERE category_id = ?', [id]);
   // Delete categorization rules using this category
   await runQuery('DELETE FROM categorization_rules WHERE category_id = ?', [id]);
+  // Подкатегориите на изтрита група остават самостоятелни
+  await runQuery('UPDATE categories SET parent_id = NULL WHERE parent_id = ?', [id]);
   // Delete the category
   return await runQuery('DELETE FROM categories WHERE id = ?', [id]);
 }
@@ -850,8 +854,8 @@ function appendReportFilters(query, params, { startDate, endDate, types, categor
     params.push(...types, ...types);
   }
   if (categoryId) {
-    query += ' AND t.category_id = ?';
-    params.push(categoryId);
+    query += ` AND ${categoryFilterSql()}`;
+    params.push(categoryId, categoryId);
   }
   return query;
 }
@@ -977,8 +981,8 @@ async function getCategoryBreakdown(startDate, endDate, types = null, categoryId
 
   // Filter by specific category
   if (categoryId) {
-    query += ' AND c.id = ?';
-    params.push(categoryId);
+    query += ` AND ${categoryFilterSql('c.id')}`;
+    params.push(categoryId, categoryId);
   }
 
   query += ' GROUP BY c.id, c.name, c.type, c.color';
@@ -1027,10 +1031,14 @@ async function getCategoryBreakdown(startDate, endDate, types = null, categoryId
     }
   }
 
-  // Sort by count descending
-  categorized.sort((a, b) => b.count - a.count);
-
-  return categorized;
+  // Подкатегориите — в реда на групата си (children); сортиране по брой
+  const grouped = groupRows(categorized, await getAllCategories(), {
+    empty: () => ({ count: 0, income: 0, expenses: 0, net: 0 }),
+    merge: (target, row) => ['count', 'income', 'expenses', 'net'].forEach(key => { target[key] += row[key] || 0; })
+  });
+  const byCount = (a, b) => b.count - a.count;
+  grouped.forEach(row => row.children && row.children.sort(byCount));
+  return grouped.sort(byCount);
 }
 
 // Counterparty report
@@ -1296,10 +1304,10 @@ async function getCountryReport(types = ['expense'], categoryId = null) {
   const typePlaceholders = types.map(() => '?').join(', ');
 
   // Build category filter
-  const categoryFilter = categoryId ? 'AND t.category_id = ?' : '';
+  const categoryFilter = categoryId ? `AND ${categoryFilterSql()}` : '';
   const params = [...types, ...types];
   if (categoryId) {
-    params.push(categoryId);
+    params.push(categoryId, categoryId);
   }
 
   const result = await allQuery(`
@@ -1400,8 +1408,22 @@ async function getCategoryMonthlyReport(types = ['expense']) {
     categoryData[row.id].totalCount += row.count;
   });
 
-  // Convert to array and sort by total (absolute value)
-  const categories = Object.values(categoryData).sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+  // Подкатегориите — в реда на групата си (children); сортиране по сумата (абсолютна стойност)
+  const categories = groupRows(Object.values(categoryData), await getAllCategories(), {
+    empty: () => ({ months: {}, total: 0, totalCount: 0 }),
+    merge: (target, row) => {
+      Object.entries(row.months).forEach(([key, m]) => {
+        const sum = target.months[key] || (target.months[key] = { amount: 0, count: 0 });
+        sum.amount += m.amount;
+        sum.count += m.count;
+      });
+      target.total += row.total;
+      target.totalCount += row.totalCount;
+    }
+  });
+  const byTotal = (a, b) => Math.abs(b.total) - Math.abs(a.total);
+  categories.forEach(row => row.children && row.children.sort(byTotal));
+  categories.sort(byTotal);
 
   return {
     months,

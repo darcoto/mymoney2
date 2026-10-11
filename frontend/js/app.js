@@ -99,6 +99,7 @@ const ACTION_HANDLERS = {
     'tx-overlay': d => showTransactionOverlay(Number(d.index)),
     'insight-tx': d => showInsightTransactions(d.insightKey, Number(d.index)),
     'compare-tx': d => showCompareTransactions(Number(d.index), d.period),
+    'toggle-category-group': (d, el) => toggleCategoryGroup(el),
 
     // Настройки
     'provider-credentials': d => showProviderCredentialsModal(Number(d.providerId)),
@@ -114,7 +115,7 @@ document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const handler = ACTION_HANDLERS[el.dataset.action];
-    if (handler) handler(el.dataset);
+    if (handler) handler(el.dataset, el);
 });
 
 // Initialize app

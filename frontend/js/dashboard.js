@@ -90,9 +90,8 @@ class Dashboard {
             // Income vs Expense chart for last 6 months
             charts.createIncomeExpenseChart('incomeExpenseChart', chartData);
 
-            // Top 5 categories pie chart
-
-            const top5 = categoryData.slice(0, 5);
+            // Топ 5 категории (групите — със сбора на подкатегориите си) по сума на разходите
+            const top5 = [...categoryData].sort((a, b) => (b.expenses || 0) - (a.expenses || 0)).slice(0, 5);
             const pieData = {
                 labels: top5.map(c => c.name),
                 values: top5.map(c => c.expenses || 0),

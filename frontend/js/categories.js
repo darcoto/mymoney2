@@ -60,17 +60,18 @@ function renderCategoriesByType(categories, type, containerId) {
         container.appendChild(div);
     };
 
+    const withIcon = category => escapeHtml(`${category.icon ? `${category.icon} ` : ''}${category.name}`);
     parentCategories.forEach(category => {
-        appendItem(category, escapeHtml(category.name));
+        appendItem(category, withIcon(category));
         childCategories
             .filter(c => c.parent_id === category.id)
-            .forEach(child => appendItem(child, `↳ ${escapeHtml(child.name)}`, category));
+            .forEach(child => appendItem(child, `↳ ${withIcon(child)}`, category));
     });
 
     // Render orphan children (if parent was deleted)
     childCategories
         .filter(c => !parentCategories.find(p => p.id === c.parent_id))
-        .forEach(category => appendItem(category, escapeHtml(category.name)));
+        .forEach(category => appendItem(category, withIcon(category)));
 }
 
 function renderCategorizationRules(rules) {

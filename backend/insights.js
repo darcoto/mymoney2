@@ -9,6 +9,7 @@
 
 const database = require('./database');
 const countryUtils = require('./country-codes');
+const { groupRows } = require('./category-groups');
 
 const TYPE_SQL = "COALESCE(c.type, 'expense')";
 
@@ -283,11 +284,20 @@ async function getYearComparison(year, month, mode = 'month') {
     add(cur, 'current');
     add(prev, 'previous');
 
-    const rows = [...byId.values()].map(r => ({
-        ...r,
+    // Подкатегориите — в реда на групата си (children)
+    const withDiff = r => Object.assign(r, {
         diff: round2(r.current - r.previous),
         pct: r.previous ? round2(((r.current - r.previous) / Math.abs(r.previous)) * 100) : null
-    }));
+    });
+    const fields = ['current', 'previous', 'currentCount', 'previousCount'];
+    const byCurrent = (a, b) => b.current - a.current || b.previous - a.previous;
+    const rows = groupRows([...byId.values()], await database.getAllCategories(), {
+        empty: () => ({ current: 0, previous: 0, currentCount: 0, previousCount: 0 }),
+        merge: (target, row) => fields.forEach(f => { target[f] = round2(target[f] + row[f]); })
+    }).map(r => {
+        if (r.children) r.children = r.children.map(withDiff).sort(byCurrent);
+        return withDiff(r);
+    });
     const totals = type => {
         const list = rows.filter(r => r.type === type);
         const c = round2(list.reduce((s, r) => s + r.current, 0));
@@ -298,8 +308,8 @@ async function getYearComparison(year, month, mode = 'month') {
     return {
         current,
         previous,
-        expenses: rows.filter(r => r.type === 'expense').sort((a, b) => b.current - a.current || b.previous - a.previous),
-        income: rows.filter(r => r.type === 'income').sort((a, b) => b.current - a.current || b.previous - a.previous),
+        expenses: rows.filter(r => r.type === 'expense').sort(byCurrent),
+        income: rows.filter(r => r.type === 'income').sort(byCurrent),
         totals: { expense: totals('expense'), income: totals('income') }
     };
 }

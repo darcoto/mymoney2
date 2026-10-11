@@ -76,12 +76,7 @@ async function ensureCategoryOptions(selectId) {
     const select = document.getElementById(selectId);
     if (select && select.options.length <= 1) {
         const categories = await api.getCategories();
-        categories.forEach(cat => {
-            const option = document.createElement('option');
-            option.value = cat.id;
-            option.textContent = cat.name;
-            select.appendChild(option);
-        });
+        select.insertAdjacentHTML('beforeend', categoryFilterOptionsHtml(categories));
     }
     return select;
 }
@@ -89,7 +84,7 @@ async function ensureCategoryOptions(selectId) {
 // Избраната категория от select-а: { categoryId, categoryName } (null, ако е „Всички“)
 function readSelectedCategory(select) {
     const categoryId = select?.value || null;
-    const categoryName = categoryId ? select.options[select.selectedIndex].text : null;
+    const categoryName = categoryId ? select.options[select.selectedIndex].text.replace(' (всички)', '').trim() : null;
     return { categoryId, categoryName };
 }
 
@@ -180,9 +175,9 @@ async function generateReport() {
             categoryTbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Няма данни</td></tr>';
             categoryTfoot.innerHTML = '';
         } else {
-            categoryTbody.innerHTML = categoryBreakdown.map(row => `
-                    <tr>
-                        <td>
+            categoryTbody.innerHTML = renderGroupedRows(categoryBreakdown, (row, trAttrs) => `
+                    <tr ${trAttrs}>
+                        <td>${categoryGroupToggle(row)}
                             <span class="category-badge clickable" style="background-color: ${row.color};"
                                   data-action="category-tx" data-category-id="${row.id}" data-category-name="${escapeHtml(row.name)}">
                                 ${escapeHtml(row.name)}
@@ -193,7 +188,7 @@ async function generateReport() {
                                title="Покажи транзакциите">${row.count}</a>
                         </td>${reportAmountCells(row.income, row.expenses, row.net)}
                     </tr>
-                `).join('');
+                `);
 
             categoryTfoot.innerHTML = renderTotalsRow(sumReportTotals(categoryBreakdown));
         }
@@ -491,13 +486,22 @@ async function generateCategoryReport() {
         months.forEach(m => monthTotals[m.key] = 0);
         let grandTotal = 0;
 
-        tbody.innerHTML = report.categories.map(row => {
+        // Тоталите — само от горното ниво (групите вече съдържат подкатегориите си)
+        report.categories.forEach(row => {
+            months.forEach(month => {
+                const data = row.months[month.key];
+                const amount = data ? data.amount : 0;
+                monthTotals[month.key] += amount;
+                grandTotal += amount;
+            });
+        });
+
+        tbody.innerHTML = renderGroupedRows(report.categories, (row, trAttrs) => {
             let rowTotal = 0;
             const monthCells = months.map(month => {
                 const data = row.months[month.key];
                 const amount = data ? data.amount : 0;
                 rowTotal += amount;
-                monthTotals[month.key] += amount;
                 const amountClass = amountSignClass(amount);
                 if (amount !== 0) {
                     // month.key is "YYYY-MM", parse to year/month for the period
@@ -507,11 +511,9 @@ async function generateCategoryReport() {
                 return `<td class="num ${amountClass}">-</td>`;
             }).join('');
 
-            grandTotal += rowTotal;
-
             return `
-                <tr>
-                    <td>
+                <tr ${trAttrs}>
+                    <td>${categoryGroupToggle(row)}
                         <span class="category-badge" style="background-color: ${row.color};">
                             ${escapeHtml(row.name)}
                         </span>
@@ -520,7 +522,7 @@ async function generateCategoryReport() {
                     <td class="num ${amountSignClass(rowTotal)}">${formatCurrency(rowTotal)}</td>
                 </tr>
             `;
-        }).join('');
+        });
 
         // Footer with totals
         const footerMonthCells = months.map(month => {

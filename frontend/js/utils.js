@@ -130,8 +130,13 @@ function makeTableSortable(tableId) {
                     : bVal.localeCompare(aVal, 'bg');
             });
 
-            // Re-append sorted rows
-            rows.forEach(row => tbody.appendChild(row));
+            // Re-append sorted rows; подкатегориите остават под групата си (сортирани помежду си)
+            rows.filter(row => !row.dataset.childOf).forEach(row => {
+                tbody.appendChild(row);
+                if (row.dataset.group) {
+                    rows.filter(child => child.dataset.childOf === row.dataset.group).forEach(child => tbody.appendChild(child));
+                }
+            });
         });
     });
 }
@@ -227,9 +232,72 @@ function categoryTypeLabel(type) {
     return 'Трансфер';
 }
 
-// <option> за всяка категория с типа ѝ в скоби; selectedId — избраната (по избор)
+// Групи категории (parent_id): id на група → подкатегориите ѝ (от подадения списък)
+function categoryChildrenMap(categories) {
+    const map = new Map();
+    categories.filter(c => c.parent_id).forEach(c => {
+        if (!map.has(c.parent_id)) map.set(c.parent_id, []);
+        map.get(c.parent_id).push(c);
+    });
+    return map;
+}
+
+// Дали категорията е група (има подкатегории) — в групите не се слагат транзакции и правила
+function isCategoryGroup(category, categories) {
+    return categories.some(c => c.parent_id === category.id);
+}
+
+// Горното ниво на списъка: групите и самостоятелните (подкатегориите без родител в списъка — също)
+function topLevelCategories(categories) {
+    const ids = new Set(categories.map(c => c.id));
+    return categories.filter(c => !c.parent_id || !ids.has(c.parent_id));
+}
+
+// <option> за всяка категория с типа ѝ в скоби; selectedId — избраната (по избор).
+// Групите са <optgroup> с подкатегориите си — за избор на категория на транзакция/правило.
 function categoryOptionsHtml(categories, selectedId = null) {
-    return categories
-        .map(c => `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${escapeHtml(c.name)} (${categoryTypeLabel(c.type)})</option>`)
+    const option = c => `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${escapeHtml(c.name)} (${categoryTypeLabel(c.type)})</option>`;
+    const children = categoryChildrenMap(categories);
+    return topLevelCategories(categories)
+        .map(c => children.has(c.id)
+            ? `<optgroup label="${escapeHtml(c.name)}">${children.get(c.id).map(option).join('')}</optgroup>`
+            : option(c))
         .join('');
+}
+
+// <option> за филтър: групата също се избира (с подкатегориите), подкатегориите — отместени под нея
+function categoryFilterOptionsHtml(categories, selectedId = null) {
+    const option = (c, label) => `<option value="${c.id}" ${String(c.id) === String(selectedId) ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+    const children = categoryChildrenMap(categories);
+    return topLevelCategories(categories)
+        .map(c => children.has(c.id)
+            ? option(c, `${c.name} (всички)`) + children.get(c.id).map(ch => option(ch, `    ${ch.name}`)).join('')
+            : option(c, c.name))
+        .join('');
+}
+
+// Справка с групи: редът на групата + скритите редове на подкатегориите (data-child-of).
+// renderRow(row, trAttrs) връща <tr>; в клетката с името — categoryGroupToggle(row).
+function renderGroupedRows(rows, renderRow) {
+    return rows.map(row => {
+        if (!row.children) return renderRow(row, '');
+        const key = `g${row.id}`;
+        return renderRow(row, `class="category-group-row" data-group="${key}"`) +
+            row.children.map(child => renderRow(child, `class="category-child-row" data-child-of="${key}" hidden`)).join('');
+    }).join('');
+}
+
+// Бутон за разгъване на група в справка (празен за обикновените редове)
+function categoryGroupToggle(row) {
+    return row.children
+        ? `<button type="button" class="group-toggle" data-action="toggle-category-group" title="Подкатегории" aria-expanded="false">▸</button>`
+        : '';
+}
+
+function toggleCategoryGroup(button) {
+    const row = button.closest('tr');
+    const open = button.getAttribute('aria-expanded') !== 'true';
+    button.setAttribute('aria-expanded', String(open));
+    button.textContent = open ? '▾' : '▸';
+    row.parentElement.querySelectorAll(`tr[data-child-of="${row.dataset.group}"]`).forEach(child => { child.hidden = !open; });
 }

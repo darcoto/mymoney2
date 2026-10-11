@@ -60,13 +60,8 @@ class TransactionsPage {
 
         // Populate category filter
         const categorySelect = document.getElementById('filterCategory');
-        categorySelect.innerHTML = '<option value="">Всички категории</option><option value="uncategorized">Без категория</option>';
-        this.categories.forEach(category => {
-            const option = document.createElement('option');
-            option.value = category.id;
-            option.textContent = category.name;
-            categorySelect.appendChild(option);
-        });
+        categorySelect.innerHTML = '<option value="">Всички категории</option><option value="uncategorized">Без категория</option>' +
+            categoryFilterOptionsHtml(this.categories);
         restore(categorySelect);
 
         // Populate country filter
@@ -450,7 +445,7 @@ class TransactionsPage {
             if (cats.length === 0) return '';
             return `
                 <div style="margin-bottom: 12px;">
-                    <label style="font-size: 11px; color: var(--text-secondary); margin-bottom: 6px; display: block; font-weight: 600;">${title}</label>
+                    <label style="font-size: 11px; color: var(--text-secondary); margin-bottom: 6px; display: block; font-weight: 600;">${escapeHtml(title)}</label>
                     <div style="display: flex; flex-wrap: wrap; gap: 6px;">
                         ${cats.map(cat => `
                             <button type="button" class="modal-category-btn ${cat.id === transaction.category_id ? 'selected' : ''}"
@@ -468,15 +463,22 @@ class TransactionsPage {
             `;
         };
 
-        const expenseCategories = this.categories.filter(c => c.type === 'expense');
-        const incomeCategories = this.categories.filter(c => c.type === 'income');
-        const transferCategories = this.categories.filter(c => c.type === 'transfer');
+        // По групи: всяка група — със заглавие и подкатегориите си; самостоятелните — под заглавието на типа
+        const children = categoryChildrenMap(this.categories);
+        const renderType = (type, title) => {
+            const top = topLevelCategories(this.categories).filter(c => c.type === type);
+            const groups = top.filter(c => children.has(c.id));
+            return groups
+                .map(group => renderCategoryBubbles(children.get(group.id), `${group.icon ? `${group.icon} ` : ''}${group.name}`))
+                .join('') +
+                renderCategoryBubbles(top.filter(c => !children.has(c.id)), groups.length ? `${title.split(' ')[0]} Други` : title);
+        };
 
         const sidePanelHtml = `
                     <div style="background: #f9f9f9; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color);">
-                        ${renderCategoryBubbles(expenseCategories, '💸 Разходи')}
-                        ${renderCategoryBubbles(incomeCategories, '💰 Приходи')}
-                        ${renderCategoryBubbles(transferCategories, '🔄 Трансфери')}
+                        ${renderType('expense', '💸 Разходи')}
+                        ${renderType('income', '💰 Приходи')}
+                        ${renderType('transfer', '🔄 Трансфери')}
                         <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color);">
                             <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer;">
                                 <input type="checkbox" id="modalApplyToAll" checked style="width: 16px; height: 16px;">
