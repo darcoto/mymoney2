@@ -1,0 +1,3 @@
+# Единни окончания на редовете (LF); batch файловете остават CRLF
+* text=auto eol=lf
+*.bat text eol=crlf
