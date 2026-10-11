@@ -101,6 +101,7 @@ router.post('/run', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // nginx — без буфериране, прогресът идва веднага
   res.flushHeaders();
 
   const send = (msg) => {

@@ -28,6 +28,9 @@ const { apiError } = require('./routes/helpers');
 const auth = require('./auth');
 
 const app = express();
+// Зад reverse proxy на същата машина (nginx): истинският IP на клиента (за ограничението на
+// опитите за вход) и протоколът (https — за бисквитката и адреса за връщане от банката)
+app.set('trust proxy', 'loopback');
 
 // Middleware
 app.use(cors());

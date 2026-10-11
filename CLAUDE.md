@@ -179,6 +179,7 @@ Bank-API transactions have JSON `raw_data` with `transactionAmount`; queries use
 
 In `.env` (see `.env.example`):
 - `PORT` — server port (default 3456)
+- `HOST` — listen address (default `0.0.0.0`; the Linux service uses `127.0.0.1` behind nginx). The app sets `trust proxy` to `loopback`, so behind a local proxy `req.ip` is the real client (login rate limit) and `req.protocol` is https (Secure cookie, GoCardless redirect); SSE sets `X-Accel-Buffering: no`
 - `DATABASE_NAME` — SQLite filename in `./data/` (default `finance.db`; demo: `demo.db`). **Requires restart.**
 - `NODE_ENV` — defaults to `development` when unset; in development log lines are also printed to the console
 
@@ -207,6 +208,8 @@ All prefixed with `/api/`:
 - Agents: `backend-node-expert`, `frontend-ui-developer`, `api-docs-researcher`
 
 ## Notes
+
+- **Line endings:** LF everywhere (`.gitattributes`: `* text=auto eol=lf`, `*.bat` CRLF) — write files with LF.
 
 - **Roadmap:** functional overview (data flow) and next ideas (budgets, month-end forecast, balance history, merchants, people ledger) are in `docs/ROADMAP.md`.
 - **Demo data:** `npm run seed-demo` creates ~14 months of transactions with category groups (for the year-over-year report and screenshots).
