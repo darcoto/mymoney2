@@ -34,6 +34,7 @@ PORT=3499 DATABASE_NAME=zz-test.db node backend/server.js
 - Real bank APIs can't be exercised without the user approving access at the bank. For provider logic, instantiate the provider directly and replace `provider._getClient` with a fake axios-like `{ get, post, delete }` returning `{ data }`.
 - Telegram: replace `axios.post` with a fake before requiring `backend/telegram.js` and drive `telegram._internal.handleMessage/handleCallback` (no real bot needed). On a DB copy set `schedule.lastConsentCheck` to today first — otherwise the scheduler calls the real bank API.
 - Frontend: check in the browser (Playwright MCP is available) and look at console errors. Static files are served by `express.static` without cache settings and the browser often keeps the old JS/CSS — force-reload (Ctrl+F5) after changes.
+- **Password:** a copy of the real DB keeps the password — for tests run `DATABASE_NAME=zz-test.db node bin/set-password.js --off` on the copy (or log in with curl: `POST /api/login`, keep the cookie). The demo DB has no password.
 - Port 3456 is usually the user's running instance — don't kill it; use another port for testing.
 
 ## Tech Stack
@@ -59,6 +60,7 @@ PORT=3499 DATABASE_NAME=zz-test.db node backend/server.js
 | `scheduler.js` | In-app schedule (30 s tick, Europe/Sofia time via `time.js`): sync at `schedule.syncTimes` (off by default, max 4/day), daily backup, bank-consent expiry warning |
 | `backup.js` | `VACUUM INTO` backups in `data/backups`; `*_auto_<date>.db` pruned to 14 daily + 12 monthly; manual `*_backup_*` kept |
 | `telegram.js` | Telegram bot (long polling, no public URL): message per new bank transaction with category buttons, reply = note, `/pending`, `/status`, alerts; pairing via `/start <code>` |
+| `auth.js` | Web password (no users): scrypt hash in `app_settings` (`auth.passwordHash`, travels with the DB), HMAC-signed cookie `mm_session` (30 days; changing the password ends all sessions), middleware before static files (`/login.html`, `/api/login`, `/api/session` are public), 5 wrong attempts → 15 min block per IP. No hash = open access. Reset: `node bin/set-password.js <new>` / `--off` |
 | `api-debug.js` | Debug option (Settings → „Дебъг“, `debug.apiResponses`): saves every raw bank API response (GoCardless, Enable Banking; not token/auth calls) to `data/api-responses/<date>/*.json` — analyse without repeating rate-limited requests; delete from Settings |
 | `telegram-format.js` | Readable Telegram text: clean merchant name + city/flag from DSK card counterparties, purchase date/time and card from the description, foreign amount, note from the transfer reason, short account name |
 | `category-groups.js` | Category groups (`parent_id`): `categoryFilterSql()` — a category filter includes its subcategories; `groupRows()` — report rows nested under their group (`isGroup`, `children`) |
@@ -190,6 +192,7 @@ All prefixed with `/api/`:
 - **Transactions:** `GET /transactions` (filters: account_id, start_date, end_date, category_id, type, search, country, limit, offset), `GET /transactions/stats`, `POST /transactions` (manual), `POST /transactions/import-file` (DSK .xls or Revolut CSV; `accountId` optional — auto-detected), `POST /transactions/reconcile-imports` (`{ dryRun }`), `POST /transactions/categorize-by-counterparty`, `PUT /transactions/:id/category|notes|country`, `POST /transactions/:id/reprocess`
 - **Categories:** CRUD at `/categories`; `/categorization-rules` CRUD + `POST /categorization-rules/apply`
 - **Reports:** `/reports/monthly` (category/counterparty/account breakdowns), `/reports/transactions`, `/reports/last-12-months`, `/reports/category-breakdown`, `/reports/counterparty`, `/reports/country`, `/reports/category-monthly`; analytics (`insights.js`): `/reports/cash-flow`, `/reports/recurring`, `/reports/year-comparison?year&month&mode=month|ytd`, `/reports/bank-costs` (category „Банкови“), `/reports/trips`
+- **Auth:** `GET /session` (`{ enabled, authenticated }`), `POST /login` (`{ password }`), `POST /logout`, `PUT /password` (`{ current, password }`; empty password removes it)
 - **Debug:** `GET|PUT /debug` (`{ apiResponses }`), `DELETE /debug/api-responses`
 - **Schedule / Telegram:** `GET|PUT /schedule`, `GET|PUT|DELETE /telegram`, `POST /telegram/pair|test|pending`, `DELETE /telegram/chat`
 - **Other:** `/countries`, `/countries/:code`, `/counterparty-aliases` (CRUD), `GET /logs`, `POST /backup`, `GET /version`

@@ -5,6 +5,11 @@ const API_BASE = '/api';
 // Кодира сегмент от пътя (ID може да съдържа специални символи)
 const seg = (value) => encodeURIComponent(value);
 
+// Изтекла сесия / няма вход (зададена е парола) — към страницата за вход и обратно тук
+function redirectToLogin() {
+    window.location.href = `/login.html?next=${encodeURIComponent(location.pathname + location.search + location.hash)}`;
+}
+
 class APIClient {
     async request(endpoint, options = {}) {
         const url = `${API_BASE}${endpoint}`;
@@ -18,6 +23,11 @@ class APIClient {
                     ...headers
                 }
             });
+
+            if (response.status === 401) {
+                redirectToLogin();
+                throw new Error('Нужен е вход');
+            }
 
             if (!response.ok) {
                 // Тялото може да не е JSON (502, HTML 404 и т.н.)
@@ -43,6 +53,19 @@ class APIClient {
             console.error('API request failed:', error);
             throw error;
         }
+    }
+
+    // Достъп с парола
+    async getSession() {
+        return this.request('/session');
+    }
+
+    async logout() {
+        return this.request('/logout', { method: 'POST' });
+    }
+
+    async changePassword(current, password) {
+        return this.request('/password', { method: 'PUT', body: JSON.stringify({ current, password }) });
     }
 
     // График (синхронизация, архив) и Telegram

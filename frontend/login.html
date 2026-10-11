@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Вход — MyMoney²</title>
+    <style>
+        :root { --primary: #2196F3; --text: #212121; --muted: #757575; --danger: #f44336; --bg: #f4f4f4; }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+            background: var(--bg); color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        .login {
+            width: 100%; max-width: 360px; margin: 16px; padding: 32px 28px;
+            background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+        }
+        h1 { margin: 0 0 4px; font-size: 26px; color: var(--primary); }
+        h1 sup { font-size: 14px; }
+        p { margin: 0 0 24px; color: var(--muted); font-size: 14px; }
+        label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+        input {
+            width: 100%; padding: 11px 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 8px;
+        }
+        input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.15); }
+        button {
+            width: 100%; margin-top: 16px; padding: 12px; font-size: 16px; font-weight: 600; color: #fff;
+            background: var(--primary); border: none; border-radius: 8px; cursor: pointer;
+        }
+        button:disabled { opacity: 0.6; cursor: wait; }
+        .error { min-height: 20px; margin-top: 12px; color: var(--danger); font-size: 14px; }
+    </style>
+</head>
+<body>
+    <form class="login" id="loginForm">
+        <h1>💰 MyMoney<sup>2</sup></h1>
+        <p>Лични финанси</p>
+        <label for="password">Парола</label>
+        <input type="password" id="password" autocomplete="current-password" autofocus required>
+        <button type="submit" id="loginButton">Вход</button>
+        <div class="error" id="loginError" role="alert"></div>
+    </form>
+    <script>
+        // Връщане след входа — само към адрес в същото приложение
+        function nextUrl() {
+            let next = new URLSearchParams(location.search).get('next') || '/';
+            if (!next.startsWith('/') || next.startsWith('//') || next.startsWith('/login.html')) next = '/';
+            // Частта след # не стига до сървъра — остава в адреса на тази страница
+            return next.includes('#') ? next : next + location.hash;
+        }
+
+        // Без парола или вече влязъл — направо в приложението
+        fetch('/api/session').then(r => r.json()).then(s => { if (s.authenticated) location.replace(nextUrl()); }).catch(() => {});
+
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const button = document.getElementById('loginButton');
+            const error = document.getElementById('loginError');
+            button.disabled = true;
+            error.textContent = '';
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: document.getElementById('password').value })
+                });
+                const data = await response.json().catch(() => ({}));
+                if (response.ok) {
+                    location.replace(nextUrl());
+                    return;
+                }
+                error.textContent = data.error || `Грешка (${response.status})`;
+                document.getElementById('password').select();
+            } catch (err) {
+                error.textContent = 'Няма връзка със сървъра';
+            } finally {
+                button.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-// Настройки → „Автоматизация“ (синхронизация по график, ежедневен архив) и „Telegram“
+// Настройки → „Автоматизация“ (синхронизация по график, ежедневен архив), „Telegram“, „Достъп“ (парола), „Дебъг“
 
 const automationState = {
     bound: false,
@@ -12,7 +12,7 @@ function formatDateTime(iso) {
 
 async function loadAutomationSettings() {
     bindAutomationEvents();
-    await Promise.all([renderScheduleSettings(), renderTelegramSettings(), renderDebugSettings()]);
+    await Promise.all([renderScheduleSettings(), renderTelegramSettings(), renderAccessSettings(), renderDebugSettings()]);
 }
 
 // ─── График ─────────────────────────────────────────────────────────────────
@@ -222,6 +222,71 @@ async function telegramAction(action) {
 
 // ─── Дебъг: сурови отговори от банковите API ────────────────────────────────
 
+// ─── Достъп (парола) ─────────────────────────────────────────────────────────
+
+async function renderAccessSettings() {
+    const container = document.getElementById('accessSettings');
+    try {
+        const session = await api.getSession();
+        container.innerHTML = `
+            <p class="text-muted automation-hint">
+                ${session.enabled
+                    ? '🔒 Приложението е защитено с парола (сесията важи 30 дни). Забравена парола: <code>node bin/set-password.js &lt;нова&gt;</code> на сървъра.'
+                    : '<span class="negative">🔓 Няма парола — всеки в мрежата може да отвори приложението.</span>'}
+            </p>
+            <div class="automation-row access-form">
+                ${session.enabled ? '<input type="password" id="accessCurrent" class="input" placeholder="Текуща парола" autocomplete="current-password">' : ''}
+                <input type="password" id="accessNew" class="input" placeholder="Нова парола (поне 8 знака)" autocomplete="new-password">
+                <input type="password" id="accessRepeat" class="input" placeholder="Повторете новата" autocomplete="new-password">
+            </div>
+            <button class="btn btn-primary" data-auto-action="save-password">${session.enabled ? 'Смени паролата' : 'Задай парола'}</button>
+            ${session.enabled ? '<button class="btn btn-secondary" data-auto-action="logout">Изход</button>' : ''}
+        `;
+    } catch (error) {
+        container.innerHTML = `<p class="negative">Грешка при зареждане: ${escapeHtml(error.message)}</p>`;
+    }
+}
+
+async function accessAction(action) {
+    try {
+        if (action === 'logout') {
+            await logout();
+            return;
+        }
+        const current = document.getElementById('accessCurrent')?.value || '';
+        const password = document.getElementById('accessNew').value;
+        if (password !== document.getElementById('accessRepeat').value) {
+            showNotification('Новите пароли не съвпадат', 'error');
+            return;
+        }
+        if (password.length < 8) {
+            showNotification('Паролата трябва да е поне 8 знака', 'error');
+            return;
+        }
+        await api.changePassword(current, password);
+        showNotification('Паролата е запазена', 'success');
+        renderAccessSettings();
+        updateLogoutButton();
+    } catch (error) {
+        showNotification(error.message, 'error');
+    }
+}
+
+async function logout() {
+    await api.logout().catch(() => {});
+    window.location.href = '/login.html';
+}
+
+// Бутонът „Изход“ в менюто — само когато има парола
+async function updateLogoutButton() {
+    try {
+        const session = await api.getSession();
+        document.getElementById('logoutButton').hidden = !session.enabled;
+    } catch (error) {
+        // без бутон
+    }
+}
+
 function formatBytes(bytes) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -283,6 +348,10 @@ function bindAutomationEvents() {
     debug.addEventListener('click', e => {
         const el = e.target.closest('[data-auto-action]');
         if (el) debugAction(el.dataset.autoAction, el);
+    });
+    document.getElementById('accessSettings').addEventListener('click', e => {
+        const el = e.target.closest('[data-auto-action]');
+        if (el) accessAction(el.dataset.autoAction);
     });
     document.getElementById('telegramSettings').addEventListener('click', e => {
         const el = e.target.closest('[data-auto-action]');

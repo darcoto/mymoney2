@@ -52,6 +52,10 @@ async function startSync() {
             body: JSON.stringify({ mode })
         });
 
+        if (response.status === 401) {
+            redirectToLogin();
+            return;
+        }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const reader = response.body.getReader();

@@ -1065,3 +1065,18 @@ body {
     font-size: 0.92em;
     background: var(--bg-secondary, #fafafa);
 }
+
+/* Настройки → Достъп */
+.access-form {
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.access-form .input {
+    flex: 1 1 200px;
+    max-width: 260px;
+}
+
+#logoutButton {
+    margin-left: 8px;
+}

@@ -25,6 +25,7 @@ const scheduler = require('./scheduler');
 const telegram = require('./telegram');
 const syncService = require('./sync-service');
 const { apiError } = require('./routes/helpers');
+const auth = require('./auth');
 
 const app = express();
 
@@ -32,6 +33,10 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Парола за уеб достъпа (ако е зададена) — преди статичните файлове и API-то
+app.use(auth.middleware);
+app.use('/api', auth.router);
 
 // Serve static files from frontend
 app.use(express.static(path.join(__dirname, '../frontend')));

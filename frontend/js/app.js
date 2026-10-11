@@ -137,6 +137,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Sync button (main nav)
     document.getElementById('syncButton').addEventListener('click', showSyncModal);
+    document.getElementById('logoutButton').addEventListener('click', logout);
+    updateLogoutButton();
     document.getElementById('syncStartBtn').addEventListener('click', startSync);
     // syncCancelBtn / syncModalClose получават onclick в showSyncModal / startSync
 
