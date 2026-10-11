@@ -1,6 +1,7 @@
 /**
  * Seed script for demo database
- * Creates sample data: 3 banks, 5 accounts, 50 transactions, providers
+ * Creates sample data: 3 banks, 5 accounts, ~14 months of transactions (for the year-over-year
+ * report), category groups, rules, providers
  *
  * Usage: node backend/seed-demo.js
  */
@@ -113,6 +114,28 @@ const merchants = [
   { name: 'ДЕКАТЛОН БЪЛГАРИЯ',      catIdx: 10, min: -15, max: -120 }
 ];
 
+// Групи (parent_id) — добавят се след категориите, за да не се местят id-тата им
+const categoryGroups = [
+  { name: 'Храна',          color: '#e67e22', icon: '🍽️', children: [1] },
+  { name: 'Придвижване',    color: '#2980b9', icon: '🧭', children: [2] },
+  { name: 'Дом',            color: '#8e44ad', icon: '🏡', children: [3, 8, 9] },
+  { name: 'Семейство',      color: '#e84393', icon: '👨‍👩‍👧', children: [4, 7] },
+  { name: 'Свободно време', color: '#16a085', icon: '🎉', children: [5] },
+  { name: 'Покупки',        color: '#d35400', icon: '🛍️', children: [6] },
+  { name: 'Финанси',        color: '#34495e', icon: '💳', children: [10] }
+];
+
+// Месечни плащания (за справката „Повтарящи се“): ден от месеца, сума, категория (index)
+const monthlyBills = [
+  { name: 'NETFLIX.COM',          catIdx: 4, day: 5,  amount: -13.99 },
+  { name: 'SPOTIFY AB',           catIdx: 4, day: 12, amount: -10.99 },
+  { name: 'A1 БЪЛГАРИЯ ЕАД',      catIdx: 8, day: 18, amount: -32.90 },
+  { name: 'СОФИЙСКА ВОДА АД',     catIdx: 2, day: 22, amount: -24.50 },
+  { name: 'ДЗИ ОБЩО ЗАСТРАХОВАНЕ', catIdx: 9, day: 3, amount: -41.20 }
+];
+
+const MONTHS = 14;
+
 const incomeCounterparties = [
   { name: 'ДИГИТАЛ СОЛЮШЪНС ООД',  catIdx: 11, min: 2800, max: 3500, desc: 'Заплата м.' },
   { name: 'УЕБКРАФТ ЕООД',         catIdx: 12, min: 500,  max: 2000, desc: 'Фрийланс проект' },
@@ -138,52 +161,49 @@ function pick(arr) {
   return arr[randInt(0, arr.length - 1)];
 }
 
-function randomDate(monthsBack) {
-  const now = new Date();
-  const from = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1);
-  const diff = now.getTime() - from.getTime();
-  return new Date(from.getTime() + rand() * diff).toISOString().split('T')[0];
-}
-
 function roundAmount(v) {
   return Math.round(v * 100) / 100;
 }
 
+function dateInMonth(monthsBack, day) {
+  const now = new Date();
+  const d = new Date(now.getFullYear(), now.getMonth() - monthsBack, day);
+  if (d > now) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function generateTransactions() {
   const txs = [];
+  const push = (id, accountId, date, amount, counterparty, description, catIdx) => {
+    if (date) txs.push({ id, accountId, date, amount: roundAmount(amount), counterparty, description, categoryId: catIdx + 1 });
+  };
 
-  // ── 10 income transactions ──
-  for (let i = 0; i < 10; i++) {
-    const cp = pick(incomeCounterparties);
-    const acc = i < 7 ? accounts[0] : accounts[2]; // mostly main account
-    const date = randomDate(6);
-    txs.push({
-      id: `TX_INC_${i}`,
-      accountId: acc.id,
-      date,
-      amount: roundAmount(randRange(cp.min, cp.max)),
-      counterparty: cp.name,
-      description: cp.desc || `Приход от ${cp.name}`,
-      categoryId: cp.catIdx + 1
+  for (let m = 0; m < MONTHS; m++) {
+    // Заплата на 25-о; понякога фрийланс
+    const salary = incomeCounterparties[0];
+    push(`TX_SAL_${m}`, accounts[0].id, dateInMonth(m, 25), randRange(salary.min, salary.max), salary.name, `${salary.desc} ${m}`, salary.catIdx);
+    if (rand() < 0.35) {
+      const free = incomeCounterparties[1];
+      push(`TX_FRL_${m}`, accounts[1].id, dateInMonth(m, randInt(1, 28)), randRange(free.min, free.max), free.name, free.desc, free.catIdx);
+    }
+
+    // Месечни сметки
+    monthlyBills.forEach((bill, i) => {
+      push(`TX_BILL_${m}_${i}`, accounts[0].id, dateInMonth(m, bill.day), bill.amount, bill.name, `Плащане ${bill.name}`, bill.catIdx);
     });
+
+    // ~25 покупки на месец
+    const count = randInt(20, 30);
+    for (let i = 0; i < count; i++) {
+      const merchant = pick(merchants);
+      push(`TX_EXP_${m}_${i}`, pick(accounts.slice(0, 3)).id, dateInMonth(m, randInt(1, 28)),
+        randRange(merchant.min, merchant.max), merchant.name, `Плащане ${merchant.name}`, merchant.catIdx);
+    }
   }
 
-  // ── 40 expense transactions ──
-  for (let i = 0; i < 40; i++) {
-    const m = pick(merchants);
-    const acc = pick(accounts.slice(0, 3)); // first 3 accounts get transactions
-    const date = randomDate(6);
-    const amount = roundAmount(randRange(m.min, m.max));
-    txs.push({
-      id: `TX_EXP_${i}`,
-      accountId: acc.id,
-      date,
-      amount,
-      counterparty: m.name,
-      description: `Плащане ${m.name}`,
-      categoryId: m.catIdx + 1
-    });
-  }
+  // Подарък веднъж
+  const gift = incomeCounterparties[2];
+  push('TX_GIFT', accounts[0].id, dateInMonth(3, 14), randRange(gift.min, gift.max), gift.name, gift.desc, gift.catIdx);
 
   txs.sort((a, b) => b.date.localeCompare(a.date));
   return txs;
@@ -329,6 +349,15 @@ async function seed() {
     }
     console.log(`Created ${categories.length} categories`);
 
+    for (const group of categoryGroups) {
+      const result = await run("INSERT INTO categories (name, type, color, icon) VALUES (?, 'expense', ?, ?)",
+        [group.name, group.color, group.icon]);
+      for (const childId of group.children) {
+        await run('UPDATE categories SET parent_id = ? WHERE id = ?', [result.lastID, childId]);
+      }
+    }
+    console.log(`Created ${categoryGroups.length} category groups`);
+
     // ── Transactions ──
 
     const transactions = generateTransactions();
@@ -352,6 +381,7 @@ async function seed() {
       { pattern: 'ЗАРА|H&M',                                        categoryId: 6, priority: 10 },
       { pattern: 'ИКЕА|BRICOLAGE',                                  categoryId: 8, priority: 10 },
       { pattern: 'A1 БЪЛГАРИЯ|YETTEL',                               categoryId: 9, priority: 10 },
+      { pattern: 'ЗАСТРАХОВАНЕ',                                    categoryId: 10, priority: 10 },
       { pattern: 'ДИГИТАЛ СОЛЮШЪНС|ЗАПЛАТА',                        categoryId: 12, priority: 10 }
     ];
 

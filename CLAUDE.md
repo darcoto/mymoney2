@@ -16,7 +16,7 @@ npm start            # Start server (http://localhost:3456)
 npm run dev          # Start with auto-reload (nodemon)
 npm run demo         # Start with demo database (data/demo.db)
 npm run seed-demo    # Create/reset demo database with sample data
-node screenshots.js  # Regenerate README screenshots (puppeteer, expects a running server)
+node screenshots.js  # Regenerate README screenshots (puppeteer; starts its own server on port 3498 with data/demo.db — never the real data)
 ```
 
 Also: `start.bat` / `start.sh` (start + open browser), `bin/cli.js` (npm CLI `mymoney2 --port <n> --no-open`).
@@ -78,7 +78,7 @@ Routes in `backend/routes/`: `providers.js`, `sync.js`, `accounts.js`, `transact
 | `base-provider.js` | Abstract base class defining the provider interface |
 | `provider-registry.js` | Registry/factory; classes are registered in `server.js` (scripts that don't load `server.js` must instantiate the provider class directly) |
 | `gocardless-provider.js` | GoCardless Bank Account Data API integration |
-| `enablebanking-provider.js` | Enable Banking API integration (JWT/RSA auth) |
+| `enablebanking-provider.js` | Enable Banking API integration (JWT/RSA auth) — **incomplete**: `completeAuthorization()` is never called, `/auth` lacks `access`/`state`/country, redirect is localhost (see `docs/ROADMAP.md`) |
 
 ### Frontend (`frontend/`)
 
@@ -198,10 +198,15 @@ All prefixed with `/api/`:
 
 - App version is in `VERSION` (`major.minor`, served by `/api/version`); `package.json` version is separate.
 - Hook `.claude/hooks/version-bump.js` bumps the minor version and stages `VERSION` on every `git commit` run through Claude Code. It is enabled in `.claude/settings.local.json` (git-ignored, so only on this machine).
-- Skills: `/restart`, `/version-up` (manual invocation only), `/data-audit` (read-only data checks: `node .claude/skills/data-audit/audit.js`)
+- Skills: `/restart`, `/version-up` (manual invocation only), `/data-audit` (read-only data checks: `node .claude/skills/data-audit/audit.js`; the user's categorization habits are in the git-ignored `.claude/skills/data-audit/HABITS.local.md`)
+- The GitHub repo is **public**: no personal data in tracked files (names, IBANs, card numbers, real transaction texts) — use made-up examples; personal notes go to `*.local.md` (git-ignored)
+- Hook note: the version bump runs only when the Bash command starts with `git commit` (not `cd … && git commit`)
 - Agents: `backend-node-expert`, `frontend-ui-developer`, `api-docs-researcher`
 
 ## Notes
+
+- **Roadmap:** functional overview (data flow) and next ideas (budgets, month-end forecast, balance history, merchants, people ledger) are in `docs/ROADMAP.md`.
+- **Demo data:** `npm run seed-demo` creates ~14 months of transactions with category groups (for the year-over-year report and screenshots).
 
 - **Raw API responses:** when „Дебъг“ is on, read them from `data/api-responses/` instead of calling the bank again.
 - **Logging:** all levels (including DEBUG and every SQL query) go to `data/app.log`; it gets large, so read it with `tail`/`grep`
