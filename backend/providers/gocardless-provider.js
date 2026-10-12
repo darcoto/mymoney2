@@ -623,6 +623,11 @@ class GoCardlessProvider extends BaseProvider {
       // ДСК връща блокираните суми по карти като осчетоводени (с плюс) — плащането идва отделно
       const allBooked = transactionsData.booked || [];
       const rawTransactions = allBooked.filter(tx => !isDskCardHold(tx));
+      // Неосчетоводените (pending) не се внасят — само се отбелязват в лога, за да се знае, че чакат банката
+      const pendingCount = (transactionsData.pending || []).length;
+      if (pendingCount > 0) {
+        logger.info(`[GoCardless] ${pendingCount} pending (not yet booked) transactions not imported for account ${accountId}`);
+      }
       if (rawTransactions.length < allBooked.length) {
         logger.info(`[GoCardless] Skipped ${allBooked.length - rawTransactions.length} card holds (blocked amounts) for account ${accountId}`);
       }
