@@ -40,6 +40,28 @@ async function getSchedule() {
     };
 }
 
+/**
+ * Грешките от синхронизацията за Telegram — кратко и без повторения: еднаквите съобщения на няколко
+ * сметки се обединяват в един ред („Сметка1, Сметка2: текст“), а лимитът към банката е една кратка фраза.
+ */
+function compactErrors(errors) {
+    const groups = new Map();
+    for (const raw of errors) {
+        const i = raw.indexOf(': ');
+        const name = i > 0 ? raw.slice(0, i) : '';
+        let text = i > 0 ? raw.slice(i + 2) : raw;
+        if (/лимит на заявки/i.test(text)) text = 'Лимит на заявките към банката (опитайте по-късно)';
+        text = text.length > 140 ? `${text.slice(0, 137)}...` : text;
+        if (!groups.has(text)) groups.set(text, []);
+        if (name) groups.get(text).push(name);
+    }
+    return [...groups].slice(0, 5).map(([text, names]) => {
+        const shown = names.slice(0, 3).join(', ');
+        const more = names.length > 3 ? ` +${names.length - 3}` : '';
+        return names.length ? `• ${shown}${more}: ${text}` : `• ${text}`;
+    }).join('\n');
+}
+
 async function runScheduledSync(slot) {
     await database.setSetting('schedule.lastSyncSlot', slot);
     if (isRunning()) {
@@ -49,7 +71,7 @@ async function runScheduledSync(slot) {
     try {
         const result = await runSync({ mode: 'both', trigger: 'schedule' });
         if (result.errors.length) {
-            await telegram.sendAlert(`⚠️ <b>Синхронизацията в ${slot.slice(11)} завърши с грешки</b>\n${result.errors.map(e => `• ${e}`).join('\n')}`);
+            await telegram.sendAlert(`⚠️ <b>Синхронизацията в ${slot.slice(11)} завърши с грешки</b>\n${compactErrors(result.errors)}`);
         }
     } catch (error) {
         logger.error('[Scheduler] Sync failed:', error.message);
