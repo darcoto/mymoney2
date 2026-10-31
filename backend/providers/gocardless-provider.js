@@ -27,6 +27,17 @@ function convertToEur(amount, currency) {
   return amount;
 }
 
+const RATE_LIMIT_MAX_WAIT_S = 120;
+const RATE_LIMIT_MAX_TRIES = 2;
+
+// „The rate limit for this resource is 4/day. Please try again in 22 seconds“ → 22 (иначе null)
+function retryAfterSeconds(error) {
+  if (error.response?.status !== 429) return null;
+  const detail = error.response.data?.detail || '';
+  const seconds = detail.match(/in (\d+) seconds?/i)?.[1];
+  return seconds === undefined ? null : Number(seconds);
+}
+
 // Превръща грешка от GoCardless API в разбираемо съобщение за UI
 function describeApiError(error) {
   const status = error.response?.status;
@@ -219,9 +230,21 @@ class GoCardlessProvider extends BaseProvider {
         apiDebug.saveAxiosResponse('gocardless', response);
         return response;
       },
-      (error) => {
+      async (error) => {
         const fullUrl = error.config ? `${error.config.baseURL}${error.config.url}` : 'unknown';
         apiDebug.saveAxiosError('gocardless', error);
+
+        // Лимитът „4/ден“ е плаващ 24-часов прозорец: ако синхронизацията стартира секунди по-рано от
+        // вчера, най-старата заявка още не е изтекла. Банката казва „try again in N seconds“ — изчакваме и
+        // повтаряме. 429 не се брои в лимита. Дълго чакане (изчерпан лимит) не се опитва.
+        const wait = retryAfterSeconds(error);
+        const tries = error.config?._rateLimitTries || 0;
+        if (wait !== null && wait <= RATE_LIMIT_MAX_WAIT_S && tries < RATE_LIMIT_MAX_TRIES) {
+          logger.info(`[GoCardless API] 429 ${fullUrl} — изчакване ${wait + 2} s и повторен опит ${tries + 1}/${RATE_LIMIT_MAX_TRIES}`);
+          await new Promise(resolve => setTimeout(resolve, (wait + 2) * 1000));
+          error.config._rateLimitTries = tries + 1;
+          return client.request(error.config);
+        }
         logger.error(`[GoCardless API] Response error: ${fullUrl}`, {
           status: error.response?.status,
           data: error.response?.data
